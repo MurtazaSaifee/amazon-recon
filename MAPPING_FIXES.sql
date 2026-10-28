@@ -1,8 +1,11 @@
--- MAPPING_FIXES.sql: fixes to the mapping configs, applied after seed-config.
+-- MAPPING_FIXES.sql: fixes to the mapping configs, applied once to a freshly seeded config.
 --
--- Applied by `recon apply-fixes --file MAPPING_FIXES.sql` (make after) in one transaction: every
--- statement applies, or none does. Each UPDATE and DELETE is guarded by the old values it expects, so
--- applying the file again changes nothing. Every change is recorded in mapping_rule_history.
+-- Applied by `recon apply-fixes --file MAPPING_FIXES.sql` (make after), straight after seed-config, in one
+-- transaction. Every statement must change at least one row, so either every statement applies or none does.
+-- Each UPDATE and DELETE is guarded by the old values it expects. A guard that matches no row (for example,
+-- a second apply to the same config) fails the build loudly with the statement's number, and nothing is
+-- committed. Every change is recorded in mapping_rule_history, and apply-fixes prints the rows each statement
+-- changed.
 --
 -- Block format. One block per defect, in this shape:
 --

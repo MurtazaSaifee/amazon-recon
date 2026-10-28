@@ -251,7 +251,7 @@ const consolidatedHeaderRow = 10
 // It must run after seeding and before ingesting.
 func routeTransferToUnmappedField(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	if err := store.ApplyFixes(context.Background(), pool, `UPDATE payment_mapping_rules
+	if _, err := store.ApplyFixes(context.Background(), pool, `UPDATE payment_mapping_rules
 		SET to_summary_field_when_positive_amount = 'bank_account_transfer_round_off',
 		    to_summary_field_when_negative_amount = 'bank_account_transfer_round_off'
 		WHERE rule_id = 'P-008';`); err != nil {

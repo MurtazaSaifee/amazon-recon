@@ -215,10 +215,14 @@ func cmdApplyFixes(ctx context.Context, args []string) error {
 	}
 	defer pool.Close()
 
-	if err := store.ApplyFixes(ctx, pool, string(sql)); err != nil {
+	results, err := store.ApplyFixes(ctx, pool, string(sql))
+	if err != nil {
 		return err
 	}
-	fmt.Printf("applied %s in one transaction\n", *file)
+	for _, r := range results {
+		fmt.Printf("  statement %d: %d row(s) changed: %s\n", r.Number, r.RowsAffected, r.Head)
+	}
+	fmt.Printf("applied %s in one transaction: %d statement(s)\n", *file, len(results))
 	return nil
 }
 
