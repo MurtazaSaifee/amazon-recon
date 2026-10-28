@@ -19,17 +19,20 @@ import (
 	"amazonrecon/internal/store"
 )
 
-// Run modes, recorded on each run. Baseline turns the interpretation switches off.
+// Mode is the run mode, recorded on each run. Baseline turns the interpretation switches off.
+type Mode string
+
+// The two run modes.
 const (
-	ModeFixed    = "fixed"
-	ModeBaseline = "baseline"
+	ModeFixed    Mode = "fixed"
+	ModeBaseline Mode = "baseline"
 )
 
 // Inputs names the two report files and the mode the run is recorded with.
 type Inputs struct {
 	PaymentsPath   string
 	SettlementPath string
-	Mode           string // ModeFixed or ModeBaseline; empty means ModeFixed
+	Mode           Mode // ModeFixed or ModeBaseline; empty means ModeFixed
 }
 
 // Result is what a successful ingest run produced.
@@ -40,7 +43,7 @@ type Result struct {
 	SettlementLines int    // settlement lines stored, header included
 	Malformed       int    // malformed lines of both reports, all stored in ingest_errors
 	ConfigHash      string // SHA-256 of the mapping configs the run used
-	Mode            string
+	Mode            Mode
 }
 
 // Run ingests both reports as one run. It replaces the stored lines of both
@@ -75,20 +78,20 @@ func Run(ctx context.Context, pool *pgxpool.Pool, in Inputs) (Result, error) {
 func run(ctx context.Context, pool *pgxpool.Pool, runID int64, in Inputs) (Result, error) {
 	payDigest, err := digestFile(in.PaymentsPath)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("digest payments file: %w", err)
 	}
 	setDigest, err := digestFile(in.SettlementPath)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("digest settlement file: %w", err)
 	}
 
 	settle, err := readSettlement(in.SettlementPath)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("read settlement report: %w", err)
 	}
 	pay, err := readPayments(in.PaymentsPath)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("read payments report: %w", err)
 	}
 
 	headerID := settle.Header.SettlementID
@@ -114,14 +117,14 @@ func run(ctx context.Context, pool *pgxpool.Pool, runID int64, in Inputs) (Resul
 	// The rules are read inside the transaction, so every line is mapped with the configs the run stored.
 	payRules, setRules, err := store.LoadRules(ctx, tx)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("load mapping rules: %w", err)
 	}
 	configHash, err := store.ConfigHash(ctx, tx)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("hash mapping configs: %w", err)
 	}
 	switches := mapping.SwitchesFor(in.Mode == ModeBaseline)
-	if err := store.SetRunConfig(ctx, tx, runID, configHash, in.Mode, switches.Names()); err != nil {
+	if err := store.SetRunConfig(ctx, tx, runID, configHash, string(in.Mode), switches.Names()); err != nil {
 		return Result{}, fmt.Errorf("record run config: %w", err)
 	}
 	mapper := mapping.NewMapper(payRules, setRules, switches)
