@@ -236,8 +236,18 @@ func TestSummarySheetFormulasKeepValues(t *testing.T) {
 	checkValue(t, f, sheet, "Refunded sales", "C", "-10.00")
 	checkValue(t, f, sheet, "Summary net (all Summary fields)", "C", "1484.12")
 	checkValue(t, f, sheet, "Summary net (all Summary fields)", "D", "1259.56")
-	checkValue(t, f, sheet, "Routing gap, rule group P-002,P-003,P-004,P-005", "C", "-234.56")
-	checkValue(t, f, sheet, "Routing gap, rule group P-008", "C", "-1000.00")
+	checkValue(t, f, sheet, "Payments routing gap, rule group P-002,P-003,P-004,P-005", "C", "-234.56")
+	checkValue(t, f, sheet, "Payments routing gap, rule group P-008", "C", "-1000.00")
+	checkValue(t, f, sheet, "Settlements routing gap, rule group Unmapped", "D", "-10.00")
+	// Each source lists only its own rule groups, one row per group with a non-zero gap.
+	wantGaps := []string{
+		"Payments routing gap, rule group P-002,P-003,P-004,P-005|-234.56|",
+		"Payments routing gap, rule group P-008|-1000.00|",
+		"Settlements routing gap, rule group Unmapped||-10.00",
+	}
+	if got := routingGapRows(t, f, sheet); !slices.Equal(got, wantGaps) {
+		t.Errorf("routing gap rows\n got %q\nwant %q", got, wantGaps)
+	}
 	checkFormulaCell(t, f, sheet, "Remaining difference (in-scope lines minus Settlement total)", "C", "-1000.00")
 	checkValue(t, f, sheet, "Remaining difference (in-scope lines minus Settlement total)", "D", "0.00")
 	checkValue(t, f, sheet, "Unreconciled payment amounts", "C", "-1010.00")
@@ -350,6 +360,25 @@ func checkFormulaCell(t *testing.T, f *excelize.File, sheet, label, col, want st
 	if value != want {
 		t.Errorf("%q %s stored value = %q, want %q (formula %q)", label, cell, value, want, formula)
 	}
+}
+
+// routingGapRows returns the routing-gap rows of a sheet as "label|payments|settlements", raw values.
+func routingGapRows(t *testing.T, f *excelize.File, sheet string) []string {
+	t.Helper()
+	var out []string
+	for row := 1; row <= 200; row++ {
+		label, err := f.GetCellValue(sheet, fmt.Sprintf("B%d", row))
+		if err != nil {
+			t.Fatalf("read B%d: %v", row, err)
+		}
+		if !strings.Contains(label, "routing gap, rule group") {
+			continue
+		}
+		p, _ := f.GetCellValue(sheet, fmt.Sprintf("C%d", row), excelize.Options{RawCellValue: true})
+		s, _ := f.GetCellValue(sheet, fmt.Sprintf("D%d", row), excelize.Options{RawCellValue: true})
+		out = append(out, label+"|"+p+"|"+s)
+	}
+	return out
 }
 
 func findLabel(t *testing.T, f *excelize.File, sheet, label string) int {

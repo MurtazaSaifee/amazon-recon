@@ -2,7 +2,6 @@ package report
 
 import (
 	"fmt"
-	"sort"
 
 	"github.com/shopspring/decimal"
 	"github.com/xuri/excelize/v2"
@@ -138,30 +137,31 @@ func writeTieOut(w *sheetWriter, row int, r recon.Report, money, bold int) int {
 	w.number(row, "D", s.SummaryNet, money)
 	row++
 
-	gapRules := map[string]bool{}
+	// Each source lists only its own rule groups, and only the groups with a non-zero routing gap.
+	firstGap := row
+	listed := 0
 	for _, g := range p.Gaps {
-		gapRules[g.Rule] = true
+		if g.Amount.IsZero() {
+			continue
+		}
+		w.text(row, "B", "Payments routing gap, rule group "+g.Rule, 0)
+		w.number(row, "C", g.Amount, money)
+		row++
+		listed++
 	}
 	for _, g := range s.Gaps {
-		gapRules[g.Rule] = true
-	}
-	rules := make([]string, 0, len(gapRules))
-	for rule := range gapRules {
-		rules = append(rules, rule)
-	}
-	sort.Strings(rules)
-
-	firstGap := row
-	for _, rule := range rules {
-		w.text(row, "B", "Routing gap, rule group "+rule, 0)
-		w.number(row, "C", gapAmount(p.Gaps, rule), money)
-		w.number(row, "D", gapAmount(s.Gaps, rule), money)
+		if g.Amount.IsZero() {
+			continue
+		}
+		w.text(row, "B", "Settlements routing gap, rule group "+g.Rule, 0)
+		w.number(row, "D", g.Amount, money)
 		row++
+		listed++
 	}
 	lastGap := row - 1
 	gapsRow := row
 	w.text(row, "B", "Routing gaps total", bold)
-	if len(rules) == 0 {
+	if listed == 0 {
 		w.number(row, "C", decimal.Zero, money)
 		w.number(row, "D", decimal.Zero, money)
 	} else {
@@ -212,14 +212,4 @@ func writeTieOut(w *sheetWriter, row int, r recon.Report, money, bold int) int {
 	w.number(row, "C", r.Deferred.Amount, money)
 	w.text(row+1, "B", "Deferred lines have no Transaction Release Date. They are not in the tie-out; the memo shows the gap to the Settlement report.", 0)
 	return row + 3
-}
-
-// gapAmount returns a rule group's routing gap, or zero when the side has no such group.
-func gapAmount(gaps []recon.RoutingGap, rule string) decimal.Decimal {
-	for _, g := range gaps {
-		if g.Rule == rule {
-			return g.Amount
-		}
-	}
-	return decimal.Zero
 }
