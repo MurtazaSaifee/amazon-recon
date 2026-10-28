@@ -52,6 +52,9 @@ func WriteWorkbook(path string, r recon.Report) error {
 	if _, err := f.NewSheet(TieOutSheet); err != nil {
 		return err
 	}
+	if _, err := f.NewSheet(AuditTrailSheet); err != nil {
+		return err
+	}
 	bold, err := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
 	if err != nil {
 		return err
@@ -61,6 +64,9 @@ func WriteWorkbook(path string, r recon.Report) error {
 		return err
 	}
 	if err := writeSummary(f, r, bold, money); err != nil {
+		return err
+	}
+	if err := writeAuditTrail(f, r.Audit, bold, money); err != nil {
 		return err
 	}
 	// Excel recalculates the formulas when it opens the file; the stored values serve every other reader.
@@ -82,15 +88,19 @@ func WriteWorkbook(path string, r recon.Report) error {
 	w.text(6, "B", fmt.Sprint(r.RunID), 0)
 	w.text(7, "A", "Run started / finished", 0)
 	w.text(7, "B", r.StartedAt.Format(stamp)+" / "+r.FinishedAt.Format(stamp), 0)
+	for i, field := range runFields(r) {
+		w.text(8+i, "A", field.label, 0)
+		w.text(8+i, "B", field.value, 0)
+	}
 	for i, file := range r.Files {
-		row := 8 + i
+		row := 11 + i
 		w.text(row, "A", file.Source+" file", 0)
 		w.text(row, "B", file.FileName, 0)
 		w.text(row, "C", fmt.Sprintf("sha256 %s; %d physical lines, %d stored",
 			file.SHA256, file.PhysicalLines, file.StoredLines), 0)
 	}
 
-	const top = 12
+	const top = 15
 	w.text(top-1, "A", "Line", bold)
 	w.text(top-1, "B", "Count", bold)
 	w.text(top-1, "C", "Amount ("+r.Settlement.Currency+")", bold)

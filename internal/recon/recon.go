@@ -41,13 +41,14 @@ type FileRecord struct {
 
 // Report is the data behind the tie-out. It holds numbers only; the workbook writer formats them.
 type Report struct {
-	RunID      int64
-	StartedAt  time.Time
-	FinishedAt time.Time
-	ConfigHash string // SHA-256 (hex) of the mapping configs the run used
-	Mode       string // "fixed" or "baseline"
-	Settlement SettlementHeader
-	Files      []FileRecord
+	RunID          int64
+	StartedAt      time.Time
+	FinishedAt     time.Time
+	ConfigHash     string // SHA-256 (hex) of the mapping configs the run used
+	Mode           string // "fixed" or "baseline"
+	MalformedLines int    // malformed lines of both reports, all stored in ingest_errors
+	Settlement     SettlementHeader
+	Files          []FileRecord
 
 	Components                Total // in-scope Settlement components
 	TransactionsInScope       Total // in-scope payments lines, Transfer included
@@ -60,6 +61,7 @@ type Report struct {
 
 	Summary Summary
 	TieOut  TieOut
+	Audit   []AuditRow // one row per Contribution, in source and line order
 }
 
 // Build reads the report data for one completed run.
@@ -107,6 +109,7 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 			return Report{}, err
 		}
 		rep.Files = append(rep.Files, f)
+		rep.MalformedLines += f.MalformedLines
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -150,6 +153,9 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 	rep.ExcludingTransferMinusTotal = rep.ReleasedExcludingTransfer.Amount.Sub(total)
 
 	if err := buildSummary(ctx, pool, runID, &rep); err != nil {
+		return Report{}, err
+	}
+	if err := readAuditTrail(ctx, pool, runID, &rep); err != nil {
 		return Report{}, err
 	}
 	return rep, nil
