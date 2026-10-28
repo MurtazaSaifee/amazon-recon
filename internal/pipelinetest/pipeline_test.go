@@ -71,17 +71,16 @@ func TestPipelineTracerBullet(t *testing.T) {
 		assertDec(t, "components minus settlement total", rep.ComponentsMinusTotal, "0.00")
 	})
 
-	t.Run("released payments excluding the transfer tie to the total", func(t *testing.T) {
-		if rep.ReleasedExcludingTransfer.Count != 4 {
-			t.Errorf("released lines excluding transfer = %d, want 4", rep.ReleasedExcludingTransfer.Count)
-		}
-		assertDec(t, "released excluding transfer", rep.ReleasedExcludingTransfer.Amount, "1249.56")
-		assertDec(t, "released excluding transfer minus settlement total", rep.ExcludingTransferMinusTotal, "0.00")
+	t.Run("released payments excluding the unreconciled payments leave only the unmapped refund component", func(t *testing.T) {
+		// The refund (-10.00) is an Unreconciled payment because its settlement component is unmapped,
+		// so the Settlement total still holds that -10.00 and the payments side is 10.00 above it.
+		assertDec(t, "released excluding unreconciled payments", rep.ReleasedExcludingUnreconciled, "1259.56")
+		assertDec(t, "released excluding unreconciled payments minus settlement total", rep.ReleasedExcludingUnreconciledMinusTotal, "10.00")
 	})
 
-	t.Run("transfer is in scope and shown on its own", func(t *testing.T) {
-		assertDec(t, "transfer", rep.Transfers.Amount, "-1000.00")
-		assertDec(t, "in-scope transaction lines incl. transfer", rep.TransactionsInScope.Amount, "249.56")
+	t.Run("the Transfer is an unreconciled payment, shown on its own", func(t *testing.T) {
+		assertDec(t, "unreconciled payments", rep.TieOut.Payments.Unreconciled.Amount, "-1010.00")
+		assertDec(t, "in-scope transaction lines", rep.TransactionsInScope.Amount, "249.56")
 		assertLine(t, ctx, pool, res.RunID, "payments", pmtTransfer, func(l store.Line) {
 			if !l.InScope {
 				t.Errorf("transfer line out of scope: %s", l.ScopeReason)
@@ -153,10 +152,11 @@ func TestPipelineTracerBullet(t *testing.T) {
 		checkCell(t, f, "In-scope Components", "B", "4")
 		checkCell(t, f, "In-scope Components", "C", "1249.56")
 		checkCell(t, f, "Components minus Settlement total", "C", "0.00")
-		checkCell(t, f, "In-scope Transaction lines (Released, incl. Transfer)", "C", "249.56")
-		checkCell(t, f, "Transfer (in scope)", "C", "-1000.00")
-		checkCell(t, f, "In-scope Released excl. Transfer", "C", "1249.56")
-		checkCell(t, f, "Released excl. Transfer minus Settlement total", "C", "0.00")
+		checkCell(t, f, "In-scope transaction lines (Released)", "C", "249.56")
+		checkCell(t, f, "Unreconciled payment lines (in scope)", "B", "3")
+		checkCell(t, f, "Unreconciled payment lines (in scope)", "C", "-1010.00")
+		checkCell(t, f, "In-scope Released excl. Unreconciled payments", "C", "1259.56")
+		checkCell(t, f, "Released excl. Unreconciled payments minus Settlement total", "C", "10.00")
 		checkCell(t, f, "Deferred memo (out of scope)", "B", "2")
 		checkCell(t, f, "Deferred memo (out of scope)", "C", "125.50")
 	})

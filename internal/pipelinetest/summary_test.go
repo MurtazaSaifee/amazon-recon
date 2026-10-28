@@ -94,6 +94,15 @@ func TestSummaryDuringIngestion(t *testing.T) {
 			t.Errorf("payments in-scope lines = %d, want 5", tie.InScope.Count)
 		}
 		assertDec(t, "payments remaining difference to the Settlement total", tie.Remaining, "-1000.00")
+		// The in-scope lines of Unreconciled payment records are the Transfer (-1000.00), the refund on
+		// line 13 (-10.00, whose settlement component is unmapped) and the zero-amount line 14.
+		assertDec(t, "payments unreconciled payment amounts", tie.Unreconciled.Amount, "-1010.00")
+		if tie.Unreconciled.Count != 3 {
+			t.Errorf("payments unreconciled payment lines = %d, want 3", tie.Unreconciled.Count)
+		}
+		// The unexplained 10.00 is the unmapped refund component (settlement line 6): it is in the
+		// Settlement total but on no record_ref, so it is not an Unreconciled settlement amount.
+		assertDec(t, "payments unexplained difference", tie.Unexplained, "10.00")
 		if rep.Deferred.Count != 2 {
 			t.Errorf("deferred memo count = %d, want 2", rep.Deferred.Count)
 		}
@@ -105,6 +114,8 @@ func TestSummaryDuringIngestion(t *testing.T) {
 		assertDec(t, "settlement routing gaps", tie.GapsTotal, "-10.00")
 		assertDec(t, "settlement in-scope total", tie.InScope.Amount, "1249.56")
 		assertDec(t, "settlement remaining difference", tie.Remaining, "0.00")
+		assertDec(t, "settlement unreconciled settlement amounts", tie.Unreconciled.Amount, "0.00")
+		assertDec(t, "settlement unexplained difference", tie.Unexplained, "0.00")
 	})
 
 	t.Run("out-of-scope and in-scope lines keep their record_ref and matched rules", func(t *testing.T) {
@@ -212,6 +223,10 @@ func TestSummarySheetFormulasKeepValues(t *testing.T) {
 	checkValue(t, f, sheet, "Routing gap, rule group P-008", "C", "-1000.00")
 	checkFormulaCell(t, f, sheet, "Remaining difference (in-scope lines minus Settlement total)", "C", "-1000.00")
 	checkValue(t, f, sheet, "Remaining difference (in-scope lines minus Settlement total)", "D", "0.00")
+	checkValue(t, f, sheet, "Unreconciled payment amounts", "C", "-1010.00")
+	checkValue(t, f, sheet, "Unreconciled settlement amounts", "D", "0.00")
+	checkFormulaCell(t, f, sheet, "Unexplained difference (must be 0.00)", "C", "10.00")
+	checkFormulaCell(t, f, sheet, "Unexplained difference (must be 0.00)", "D", "0.00")
 	checkValue(t, f, sheet, "Deferred memo, out of scope (2 lines)", "C", "125.50")
 }
 

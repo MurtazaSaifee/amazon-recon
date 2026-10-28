@@ -184,9 +184,24 @@ func writeTieOut(w *sheetWriter, row int, r recon.Report, money, bold int) int {
 	w.number(row, "D", r.Settlement.Total, money)
 	row++
 
+	remainingRow := row
 	w.text(row, "B", "Remaining difference (in-scope lines minus Settlement total)", bold)
 	w.formula(row, "C", fmt.Sprintf("C%d-C%d", inScopeRow, totalRow), p.Remaining, money)
 	w.formula(row, "D", fmt.Sprintf("D%d-D%d", inScopeRow, totalRow), s.Remaining, money)
+	row++
+
+	// The residual is explained by the in-scope lines of records that are Unreconciled on each side.
+	unreconPaymentRow := row
+	w.text(row, "B", "Unreconciled payment amounts", 0)
+	w.number(row, "C", p.Unreconciled.Amount, money)
+	row++
+	unreconSettlementRow := row
+	w.text(row, "B", "Unreconciled settlement amounts", 0)
+	w.number(row, "D", s.Unreconciled.Amount, money)
+	row++
+	w.text(row, "B", "Unexplained difference (must be 0.00)", bold)
+	w.formula(row, "C", fmt.Sprintf("C%d-C%d", remainingRow, unreconPaymentRow), p.Unexplained, money)
+	w.formula(row, "D", fmt.Sprintf("D%d-D%d", remainingRow, unreconSettlementRow), s.Unexplained, money)
 	row++
 
 	w.text(row, "B", fmt.Sprintf("Deferred memo, out of scope (%d lines)", r.Deferred.Count), 0)

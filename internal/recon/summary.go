@@ -52,6 +52,13 @@ type TieOutSide struct {
 	InScope         Total // in-scope lines of the source
 	SettlementTotal decimal.Decimal
 	Remaining       decimal.Decimal // in-scope total minus the Settlement total
+
+	// Unreconciled is the in-scope lines of this side's Unreconciled records: payment lines for the
+	// payments side, settlement components for the settlements side. Unreconciled is the reason the
+	// residual exists, so it is read from the reconciliation status, not from any rule or line type.
+	Unreconciled Total
+	// Unexplained is Remaining minus Unreconciled. It is the part of the residual no record accounts for.
+	Unexplained decimal.Decimal
 }
 
 // TieOut holds the tie-out of both sources.
@@ -272,5 +279,24 @@ func readSideTieOut(ctx context.Context, pool *pgxpool.Pool, runID int64, source
 
 	out.SettlementTotal = settlementTotal
 	out.Remaining = out.InScope.Amount.Sub(settlementTotal)
+
+	unreconciled := UnreconciledPayment
+	if source == sourceSettlement {
+		unreconciled = UnreconciledSettlement
+	}
+	var unreconCount int
+	var unreconAmount string
+	if err := pool.QueryRow(ctx, `SELECT count(*)::int, COALESCE(SUM(r.amount), 0)
+		FROM source_rows r
+		JOIN reconciliation_by_record_ref v ON v.run_id = r.run_id AND v.record_ref = r.record_ref
+		WHERE r.run_id = $1 AND r.source = $2 AND r.in_scope AND v.status = $3`,
+		runID, source, string(unreconciled)).Scan(&unreconCount, &unreconAmount); err != nil {
+		return fmt.Errorf("unreconciled amounts of %s: %w", source, err)
+	}
+	out.Unreconciled.Count = unreconCount
+	if out.Unreconciled.Amount, err = decimal.NewFromString(unreconAmount); err != nil {
+		return err
+	}
+	out.Unexplained = out.Remaining.Sub(out.Unreconciled.Amount)
 	return nil
 }

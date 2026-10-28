@@ -51,14 +51,16 @@ type Report struct {
 	Settlement     SettlementHeader
 	Files          []FileRecord
 
-	Components                Total // in-scope Settlement components
-	TransactionsInScope       Total // in-scope payments lines, Transfer included
-	Transfers                 Total // in-scope Transfer lines
-	ReleasedExcludingTransfer Total // in-scope payments lines, Transfer excluded
-	Deferred                  Total // memo: Deferred lines of this Settlement, out of scope
+	Components          Total // in-scope Settlement components
+	TransactionsInScope Total // in-scope payments lines (Released), Unreconciled ones included
+	Deferred            Total // memo: Deferred lines of this Settlement, out of scope
 
-	ComponentsMinusTotal        decimal.Decimal // should be zero
-	ExcludingTransferMinusTotal decimal.Decimal // should be zero
+	// ReleasedExcludingUnreconciled is TransactionsInScope minus the payments lines of Unreconciled
+	// payment records, so it is the part of the payments total that a record accounts for.
+	ReleasedExcludingUnreconciled decimal.Decimal
+
+	ComponentsMinusTotal                    decimal.Decimal // should be zero
+	ReleasedExcludingUnreconciledMinusTotal decimal.Decimal // should be zero
 
 	Summary        Summary
 	TieOut         TieOut
@@ -118,26 +120,24 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 		return Report{}, err
 	}
 
-	var comp, pay, xfer, def Total
-	var compAmt, payAmt, xferAmt, defAmt string
+	var comp, pay, def Total
+	var compAmt, payAmt, defAmt string
 	if err := pool.QueryRow(ctx, `SELECT
 			count(*) FILTER (WHERE source = 'settlement' AND line_kind = 'component' AND in_scope),
 			COALESCE(sum(amount) FILTER (WHERE source = 'settlement' AND line_kind = 'component' AND in_scope), 0)::text,
 			count(*) FILTER (WHERE source = 'payments' AND in_scope),
 			COALESCE(sum(amount) FILTER (WHERE source = 'payments' AND in_scope), 0)::text,
-			count(*) FILTER (WHERE source = 'payments' AND in_scope AND txn_type = 'Transfer'),
-			COALESCE(sum(amount) FILTER (WHERE source = 'payments' AND in_scope AND txn_type = 'Transfer'), 0)::text,
 			count(*) FILTER (WHERE source = 'payments' AND scope_reason = 'Deferred'),
 			COALESCE(sum(amount) FILTER (WHERE source = 'payments' AND scope_reason = 'Deferred'), 0)::text
 		FROM source_rows WHERE run_id = $1`, runID).Scan(
-		&comp.Count, &compAmt, &pay.Count, &payAmt, &xfer.Count, &xferAmt, &def.Count, &defAmt,
+		&comp.Count, &compAmt, &pay.Count, &payAmt, &def.Count, &defAmt,
 	); err != nil {
 		return Report{}, fmt.Errorf("totals of run %d: %w", runID, err)
 	}
 	for _, p := range []struct {
 		t *Total
 		s string
-	}{{&comp, compAmt}, {&pay, payAmt}, {&xfer, xferAmt}, {&def, defAmt}} {
+	}{{&comp, compAmt}, {&pay, payAmt}, {&def, defAmt}} {
 		if p.t.Amount, err = decimal.NewFromString(p.s); err != nil {
 			return Report{}, err
 		}
@@ -145,18 +145,14 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 
 	rep.Components = comp
 	rep.TransactionsInScope = pay
-	rep.Transfers = xfer
 	rep.Deferred = def
-	rep.ReleasedExcludingTransfer = Total{
-		Count:  pay.Count - xfer.Count,
-		Amount: pay.Amount.Sub(xfer.Amount),
-	}
 	rep.ComponentsMinusTotal = comp.Amount.Sub(total)
-	rep.ExcludingTransferMinusTotal = rep.ReleasedExcludingTransfer.Amount.Sub(total)
 
 	if err := buildSummary(ctx, pool, runID, &rep); err != nil {
 		return Report{}, err
 	}
+	rep.ReleasedExcludingUnreconciled = pay.Amount.Sub(rep.TieOut.Payments.Unreconciled.Amount)
+	rep.ReleasedExcludingUnreconciledMinusTotal = rep.ReleasedExcludingUnreconciled.Sub(total)
 	if err := buildReconciliation(ctx, pool, runID, &rep); err != nil {
 		return Report{}, err
 	}
