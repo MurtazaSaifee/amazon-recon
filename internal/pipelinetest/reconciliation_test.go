@@ -242,6 +242,30 @@ func TestConsolidatedAndOutOfScopeSheets(t *testing.T) {
 			t.Errorf("out-of-scope rows\n got %v\nwant %v", found, want)
 		}
 	})
+
+	t.Run("out-of-scope line numbers are numeric cells", func(t *testing.T) {
+		rows := sheetRows(t, f, "Out of Scope")
+		checked := 0
+		for i, r := range rows {
+			if len(r) == 0 || (r[0] != "Deferred" && r[0] != "Other settlement") {
+				continue
+			}
+			cell := fmt.Sprintf("D%d", i+1)
+			typ, err := f.GetCellType("Out of Scope", cell)
+			if err != nil {
+				t.Fatalf("cell type of %s: %v", cell, err)
+			}
+			// A numeric cell carries no text type: excelize reports it as unset or as a number. A text cell would be
+			// a shared or inline string.
+			if typ != excelize.CellTypeNumber && typ != excelize.CellTypeUnset {
+				t.Errorf("line number in %s is text (type %v), want a number", cell, typ)
+			}
+			checked++
+		}
+		if checked != 3 {
+			t.Errorf("checked %d out-of-scope line numbers, want 3", checked)
+		}
+	})
 }
 
 // consolidatedHeaderRow is the 1-based row of the Consolidated Data column headers.
