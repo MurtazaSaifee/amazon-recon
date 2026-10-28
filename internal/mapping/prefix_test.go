@@ -39,15 +39,15 @@ func TestPrefixBeforeCatchAllOnAndOff(t *testing.T) {
 				Description:  desc,
 			},
 			TransactionType: "Transfer",
-			Total:           d("-133756.51"),
+			Total:           d("-1234.56"),
 		}
 	}
 
 	t.Run("on: a Transfer whose description extends the prefix matches the prefix rule, not the catch-all", func(t *testing.T) {
 		m := NewMapper(transferRules(), nil, prefixSwitchOn(t))
-		got := m.MapTransaction(transfer("To account ending with: 999"))
+		got := m.MapTransaction(transfer("To account ending with: 905"))
 		assertResult(t, got, wantResult{
-			RecordRef: "TRANSFER|To account ending with: 999|S-900|2026-07-18",
+			RecordRef: "TRANSFER|To account ending with: 905|S-900|2026-07-18",
 			Tier:      TierTypePrefix,
 			Matched:   []string{"P-063"},
 		})
@@ -55,22 +55,22 @@ func TestPrefixBeforeCatchAllOnAndOff(t *testing.T) {
 
 	t.Run("off (baseline): the same line falls to the catch-all wildcard rules", func(t *testing.T) {
 		m := NewMapper(transferRules(), nil, SwitchSet{})
-		got := m.MapTransaction(transfer("To account ending with: 999"))
+		got := m.MapTransaction(transfer("To account ending with: 905"))
 		assertResult(t, got, wantResult{
 			RecordRef: "|S-900|2026-07-18",
 			Tier:      TierCatchAllWildcard,
 			Matched:   []string{"P-110", "P-111"},
 			Contributions: []wantContribution{
-				{RuleID: "P-110", AmountField: "total", Amount: "-133756.51", SummaryField: "expenses_amazon_fees"},
+				{RuleID: "P-110", AmountField: "total", Amount: "-1234.56", SummaryField: "expenses_amazon_fees"},
 			},
 		})
 	})
 
 	t.Run("on: a colon right after the prefix also matches", func(t *testing.T) {
 		m := NewMapper(transferRules(), nil, prefixSwitchOn(t))
-		got := m.MapTransaction(transfer("TO_ACCOUNT_ENDING:999"))
+		got := m.MapTransaction(transfer("TO_ACCOUNT_ENDING:905"))
 		assertResult(t, got, wantResult{
-			RecordRef: "TRANSFER|TO_ACCOUNT_ENDING:999|S-900|2026-07-18",
+			RecordRef: "TRANSFER|TO_ACCOUNT_ENDING:905|S-900|2026-07-18",
 			Tier:      TierTypePrefix,
 			Matched:   []string{"P-063"},
 		})
@@ -86,7 +86,7 @@ func TestPrefixBeforeCatchAllOnAndOff(t *testing.T) {
 
 	t.Run("on: the prefix rule is not used when the type differs", func(t *testing.T) {
 		m := NewMapper(transferRules(), nil, prefixSwitchOn(t))
-		line := transfer("To account ending with: 999")
+		line := transfer("To account ending with: 905")
 		line.TransactionType = "Order"
 		got := m.MapTransaction(line)
 		if got.Tier != TierCatchAllWildcard {
@@ -99,9 +99,9 @@ func TestPrefixBeforeCatchAllOnAndOff(t *testing.T) {
 			{ID: "P-060", TransactionType: "TRANSFER", Description: "TO", AmountField: "total", RecordRef: "TRANSFER+description+settlement_id+date"},
 		}, transferRules()...)
 		m := NewMapper(rules, nil, prefixSwitchOn(t))
-		got := m.MapTransaction(transfer("To account ending with: 999"))
+		got := m.MapTransaction(transfer("To account ending with: 905"))
 		assertResult(t, got, wantResult{
-			RecordRef: "TRANSFER|To account ending with: 999|S-900|2026-07-18",
+			RecordRef: "TRANSFER|To account ending with: 905|S-900|2026-07-18",
 			Tier:      TierTypePrefix,
 			Matched:   []string{"P-063"},
 		})
@@ -112,9 +112,9 @@ func TestPrefixBeforeCatchAllOnAndOff(t *testing.T) {
 			{ID: "P-061", TransactionType: "TRANSFER", Description: "any", AmountField: "total", RecordRef: "TRANSFER+description+settlement_id+date"},
 		}, transferRules()...)
 		m := NewMapper(rules, nil, prefixSwitchOn(t))
-		got := m.MapTransaction(transfer("To account ending with: 999"))
+		got := m.MapTransaction(transfer("To account ending with: 905"))
 		assertResult(t, got, wantResult{
-			RecordRef: "TRANSFER|To account ending with: 999|S-900|2026-07-18",
+			RecordRef: "TRANSFER|To account ending with: 905|S-900|2026-07-18",
 			Tier:      TierTypeWildcard,
 			Matched:   []string{"P-061"},
 		})
