@@ -340,3 +340,67 @@ Settlements  S-022  REFUND / PROMOTION / SHIPPING           amount              
 - The Transfer goes to the matching logic, as the switch `prefix_before_catch_all`, with seam-2 tests in both modes.
 - The tax split is a schema limitation, documented in MAPPING_FIXES.sql. Routing all tax to Sales › Tax (both signs) is an accounting-policy call, applied in its own section after the reviewer's approval on 2026-10-28.
 - Every fix is confirmed by the reviewer before it is applied. The approvals were given on 2026-10-28.
+
+### After the fixes (Step 5 pass A, the after build)
+
+`make after` from scratch on database `recon_t07`: migrate, seed the configs, apply `MAPPING_FIXES.sql` in one transaction, then ingest in fixed mode. Run 1, mode fixed, interpretation switches `prefix_before_catch_all`, config hash d0c778eb20c3, 0 malformed lines. Before the after build I also rebuilt the before build with the new binary: it reproduces the baseline exactly (mode baseline, switches none, config hash a600169ca2fe, the same eight Variances), so the switch changes nothing when it is off.
+
+The mapping history holds 16 changes after the seed: four objective changes (P-065 and P-070 UPDATE, P-072 and P-005 DELETE), three payments tax rules (P-071, P-006, P-014 UPDATE) and nine settlement tax rules (S-065, S-063, S-095, S-061, S-119, S-118, S-004, S-011, S-020 UPDATE). Each one is a row in `mapping_rule_history`.
+
+The Summary sheet, every line, both columns (Variance is Payments minus Settlements):
+
+| Summary line | Payments | Settlements | Variance |
+|---|---:|---:|---:|
+| Sales | 357,758.80 | 357,758.80 | 0.00 |
+| Sales › Product Charges | 335,336.96 | 335,336.96 | 0.00 |
+| Sales › Tax | 13,436.38 | 13,436.38 | 0.00 |
+| Sales › Shipping | 8,294.16 | 8,294.16 | 0.00 |
+| Sales › Amazon fees | 0.00 | 0.00 | 0.00 |
+| Sales › Inventory Reimbursements | 679.69 | 679.69 | 0.00 |
+| Sales › Cross-account Debt Adjustment | 0.00 | 0.00 | 0.00 |
+| Sales › Other | 11.61 | 11.61 | 0.00 |
+| Sales › FBA Fees | 0.00 | 0.00 | 0.00 |
+| Sales › Micro Deposit (Failed) | 0.00 | 0.00 | 0.00 |
+| Refunds | -1,772.50 | -1,772.50 | 0.00 |
+| Refunds › Refund expenses | 258.87 | 258.87 | 0.00 |
+| Refunds › Refunded sales | -2,031.37 | -2,031.37 | 0.00 |
+| Expenses | -143,867.35 | -143,867.35 | 0.00 |
+| Expenses › Promo rebates | -11,273.53 | -11,273.53 | 0.00 |
+| Expenses › FBA fees | -0.41 | -0.41 | 0.00 |
+| Expenses › Cost of Advertising | 0.00 | 0.00 | 0.00 |
+| Expenses › Shipping Charges | 0.00 | 0.00 | 0.00 |
+| Expenses › Amazon fees | -132,593.41 | -132,593.41 | 0.00 |
+| Expenses › Reversed Reimbursements | 0.00 | 0.00 | 0.00 |
+| Expenses › Cross-account Debt Adjustment | 0.00 | 0.00 | 0.00 |
+| Expenses › Other | 0.00 | 0.00 | 0.00 |
+| Expenses › Micro Deposit | 0.00 | 0.00 | 0.00 |
+| Paid To Amazon | 0.00 | 0.00 | 0.00 |
+| Summary fields with no Summary line | none | none | 0.00 |
+
+Every Variance from the baseline is now zero:
+- Expenses › Amazon fees -133,756.51 becomes 0.00. The Transfer now matches P-063 (switch), which has no Summary field, so it contributes nothing. Payments Amazon fees is -132,593.41, the same as the settlements. The Transfer stays in the Tie-out as a routing gap.
+- Expenses › Promo rebates +11,273.53 and Expenses › Other -11,273.53 become 0.00 (F1, P-065).
+- Sales › Shipping +13,572.17 becomes 0.00. Duplicates F3 and F4 remove 13,478.97, and the tax policy moves the rest (93.20).
+- Sales › Product Charges -92.84 becomes 0.00 (policy: P-071, P-006, S-065, S-119).
+- Sales › Other -11.97 becomes 0.00. F2 (P-070) closes the 11.61 gift wrap, and the policy moves S-061 (0.36) to Sales › Tax.
+- Refunds › Refund expenses +42.59 becomes 0.00 (policy: P-014, S-004, S-011, S-020).
+- The `sales_gift_wrap_credits` field of 11.61 is gone: it now routes to Sales › Other (F2).
+- Sales › Tax is 13,436.38 on both sides, the sum of the tax components after the duplicates are removed.
+
+Tie-outs, after:
+- Payments: Summary net 212,118.95; routing gap -133,756.51 on P-063 (the Transfer, not summarised); in-scope lines 78,362.44; remaining difference -133,756.51. The remaining difference is the Transfer, which is also the one Unreconciled payment with an amount. It is explained and not hidden in a routing gap.
+- Settlements: Summary net 212,118.95; no routing gap; remaining difference 0.00.
+- Components 212,118.95 against the Settlement total, difference 0.00. Released excluding the Transfer 212,118.95, difference 0.00.
+
+Counts per status (record_refs; Unmapped counts lines): Reconciled 13,289; Reconciled with difference 0; Unreconciled payment 26 (25 order lines with a zero total, and the Transfer); Unreconciled settlement 0; Unmapped 0. The counts are the same as in the baseline, because the fixes move amounts between Summary lines and change no record's total.
+
+Notes on the after state:
+- Tier numbers moved. The prefix tier is 3, so the catch-all tiers are now 4 and 5. The baseline section above gives P-110 as tier 4, which was its number in the baseline run.
+- The Transfer's record_ref is now `TRANSFER|<its description>|90000000001|2026-07-18`, where the description carries the account's last digits. The Consolidated sheet shows the record_ref, so it shows those digits too. That is a presentation question for pass B, not a mapping one.
+
+Tax-shaped rules left unchanged for pass B (not part of the policy):
+- Fired, with no effect on any Summary line: P-004 (REFUND low_value_goods, no Summary field, in-scope sum 0.00). P-013 (REFUND marketplace_withheld_tax) and P-074 (ORDER marketplace_withheld_tax) route nothing, because the payments report has no column of that name, so their amount is always 0.
+- Fired, a tax on a fee rather than a sales tax: S-129 (FBA removal disposal fee, TAX_ON_FEE, -0.04 on 1 line, to Expenses › FBA fees). The FBA fees line agrees on both sides.
+- Did not fire in this settlement (no in-scope line): P-003, P-040 (COMMINGLING_VAT, already routes to sales_tax), P-077 (marketplace_withheld_tax, also no such column), P-130 (ORDER_RETROCHARGE sales_tax_collected), S-009, S-012 (REFUND GIFTWRAPTAX), S-075 (COMMINGLING_VAT, already routes to sales_tax), S-078, S-080, S-081, S-085, S-086, S-087, S-088, S-089, S-094, S-096, S-097, S-098, S-100, S-103, S-104, S-105, S-107, S-109, S-117, S-120 (REFUND ITEMWITHHELDTAX any), S-123, S-127 (ORDER LOWVALUEGOODSTAX-OTHER to sales_other), S-131, S-133, S-135, S-137, S-042 and S-045.
+
+Expected numbers, checked against the notes: every Summary Variance 0.00, Tax 13,436.38 on both sides, Shipping 8,294.16, Product Charges 335,336.96, Other 11.61, Refund expenses 258.87, Promo rebates -11,273.53, Amazon fees -132,593.41, Payments routing gap -133,756.51 on P-063. All as the notes predicted; nothing disagreed.
