@@ -12,6 +12,7 @@ import (
 	"amazonrecon/internal/ingest"
 	"amazonrecon/internal/recon"
 	"amazonrecon/internal/report"
+	"amazonrecon/internal/store"
 )
 
 // The reconciliation fixtures (testdata/fixtures/reconciliation_*) hold one line of each outcome.
@@ -30,7 +31,7 @@ const (
 	reconOrderARef    = "701-0000001-0000001|SYN-A-001|2026-07-02"
 	reconOrderBRef    = "701-0000002-0000002|SYN-B-002|2026-07-03"
 	reconOrderCRef    = "701-0000003-0000003|SYN-C-003|2026-07-04"
-	reconTransferRef  = "TRANSFER|12000000003|2026-07-05"
+	reconTransferRef  = "TRANSFER|To account ending with: 999|12000000003|2026-07-05"
 	reconOrderFRef    = "701-0000006-0000006|SYN-F-006|2026-07-05"
 	reconOrderGRef    = "701-0000007-0000007|SYN-G-007|2026-07-06"
 )
@@ -162,6 +163,7 @@ func TestReconciliationOutcomes(t *testing.T) {
 func TestConsolidatedAndOutOfScopeSheets(t *testing.T) {
 	ctx := context.Background()
 	pool := newPipelineDB(t)
+	routeTransferToUnmappedField(t, pool)
 	res := ingestReconFixtures(t, pool)
 	rep, err := recon.Build(ctx, pool, res.RunID)
 	if err != nil {
@@ -243,6 +245,19 @@ func TestConsolidatedAndOutOfScopeSheets(t *testing.T) {
 
 // consolidatedHeaderRow is the 1-based row of the Consolidated Data column headers.
 const consolidatedHeaderRow = 10
+
+// routeTransferToUnmappedField routes the Transfer's rule (P-008) to a Summary field with no Summary
+// line, the way a mapping fix would. The Consolidated sheet then has a column for that field.
+// It must run after seeding and before ingesting.
+func routeTransferToUnmappedField(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if err := store.ApplyFixes(context.Background(), pool, `UPDATE payment_mapping_rules
+		SET to_summary_field_when_positive_amount = 'bank_account_transfer_round_off',
+		    to_summary_field_when_negative_amount = 'bank_account_transfer_round_off'
+		WHERE rule_id = 'P-008';`); err != nil {
+		t.Fatalf("route the Transfer to an unmapped field: %v", err)
+	}
+}
 
 func ingestReconFixtures(t *testing.T, pool *pgxpool.Pool) ingest.Result {
 	t.Helper()

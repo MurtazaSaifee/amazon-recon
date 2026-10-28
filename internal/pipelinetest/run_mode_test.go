@@ -2,6 +2,7 @@ package pipelinetest
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -40,6 +41,73 @@ func checkSheetCell(t *testing.T, f *excelize.File, sheet, label, col, want stri
 		}
 	}
 	t.Errorf("%s has no row labelled %q", sheet, label)
+}
+
+// The baseline and fixed runs differ only where a switch applies. In the synthetic fixture the
+// Transfer is the one line a switch touches: fixed mode matches it with its prefix rule P-008, which
+// summarises nothing, while baseline mode falls to the Catch-all P-009 and routes it to Expenses > Amazon fees.
+func TestBaselineAndFixedDifferOnlyWhereASwitchApplies(t *testing.T) {
+	ctx := context.Background()
+	pool := newPipelineDB(t)
+
+	// The baseline run is read before the fixed run replaces the stored lines of both reports.
+	baseRes, err := ingest.Run(ctx, pool, ingest.Inputs{
+		PaymentsPath:   filepath.Join(fixtures, "synthetic_payments.csv"),
+		SettlementPath: filepath.Join(fixtures, "synthetic_settlement.txt"),
+		Mode:           ingest.ModeBaseline,
+	})
+	if err != nil {
+		t.Fatalf("ingest in baseline mode: %v", err)
+	}
+	assertMatched(t, ctx, pool, baseRes.RunID, "payments", pmtTransfer, []string{"P-009"})
+	base, err := recon.Build(ctx, pool, baseRes.RunID)
+	if err != nil {
+		t.Fatalf("reconcile baseline run: %v", err)
+	}
+
+	fixedRes := ingestFixtures(t, pool)
+	assertMatched(t, ctx, pool, fixedRes.RunID, "payments", pmtTransfer, []string{"P-008"})
+	fixed, err := recon.Build(ctx, pool, fixedRes.RunID)
+	if err != nil {
+		t.Fatalf("reconcile fixed run: %v", err)
+	}
+
+	amazonFees := func(rep recon.Report) recon.SummaryLine {
+		for _, l := range rep.Summary.Lines {
+			if l.Group == "Expenses" && l.Line == "Amazon fees" {
+				return l
+			}
+		}
+		t.Fatal("no Expenses > Amazon fees line")
+		return recon.SummaryLine{}
+	}
+	assertDec(t, "baseline Amazon fees minus fixed, payments", amazonFees(base).Payments.Sub(amazonFees(fixed).Payments), "-1000.00")
+
+	if len(base.Summary.Lines) != len(fixed.Summary.Lines) {
+		t.Fatalf("summary lines differ: baseline %d, fixed %d", len(base.Summary.Lines), len(fixed.Summary.Lines))
+	}
+	for i, b := range base.Summary.Lines {
+		f := fixed.Summary.Lines[i]
+		if b.Group == "Expenses" && b.Line == "Amazon fees" {
+			if !b.Settlements.Equal(f.Settlements) {
+				t.Errorf("Amazon fees settlements differ: baseline %s, fixed %s", b.Settlements, f.Settlements)
+			}
+			continue
+		}
+		if b.Line != f.Line || !b.Payments.Equal(f.Payments) || !b.Settlements.Equal(f.Settlements) {
+			t.Errorf("Summary line %s > %s differs between modes: baseline %s/%s, fixed %s/%s", b.Group, b.Line,
+				b.Payments, b.Settlements, f.Payments, f.Settlements)
+		}
+	}
+	if fmt.Sprint(base.Summary.Unmapped) != fmt.Sprint(fixed.Summary.Unmapped) {
+		t.Errorf("unmapped Summary fields differ: baseline %+v, fixed %+v", base.Summary.Unmapped, fixed.Summary.Unmapped)
+	}
+	if !base.TieOut.Settlements.SummaryNet.Equal(fixed.TieOut.Settlements.SummaryNet) {
+		t.Errorf("settlement Summary net differs between modes")
+	}
+	if !base.Components.Amount.Equal(fixed.Components.Amount) || base.Reconciliation.Counts != fixed.Reconciliation.Counts {
+		t.Errorf("reconciliation of the settlement side differs between modes")
+	}
 }
 
 func TestRunModeIsRecorded(t *testing.T) {
