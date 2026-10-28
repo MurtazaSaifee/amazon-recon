@@ -99,7 +99,7 @@ func WriteWorkbook(path string, r recon.Report) error {
 		w.text(8+i, "B", field.value, 0)
 	}
 	for i, file := range r.Files {
-		row := 11 + i
+		row := 12 + i
 		w.text(row, "A", file.Source+" file", 0)
 		w.text(row, "B", file.FileName, 0)
 		w.text(row, "C", fmt.Sprintf("sha256 %s; %d physical lines, %d stored",
@@ -125,7 +125,10 @@ func WriteWorkbook(path string, r recon.Report) error {
 	if w.err != nil {
 		return w.err
 	}
-	return f.SaveAs(path)
+	if err := f.SaveAs(path); err != nil {
+		return err
+	}
+	return numericFormulaCache(path)
 }
 
 const stamp = "2006-01-02 15:04:05 MST"

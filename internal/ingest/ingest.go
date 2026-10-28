@@ -120,10 +120,11 @@ func run(ctx context.Context, pool *pgxpool.Pool, runID int64, in Inputs) (Resul
 	if err != nil {
 		return Result{}, err
 	}
-	if err := store.SetRunConfig(ctx, tx, runID, configHash, in.Mode); err != nil {
+	switches := mapping.SwitchesFor(in.Mode == ModeBaseline)
+	if err := store.SetRunConfig(ctx, tx, runID, configHash, in.Mode, switches.Names()); err != nil {
 		return Result{}, fmt.Errorf("record run config: %w", err)
 	}
-	mapper := mapping.NewMapper(payRules, setRules, nil)
+	mapper := mapping.NewMapper(payRules, setRules, switches)
 
 	settlementRows := make([]store.SourceRow, 0, 1+len(settle.Components))
 	settlementRows = append(settlementRows, scopedRow(setDigest.name, settle.Header, headerID))

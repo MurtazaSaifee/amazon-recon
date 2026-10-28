@@ -116,3 +116,48 @@ Gaps, not closed in this ticket:
 - The total difference is line-based, so the per-line differences do not add up to it wherever a routing gap exists.
 - Consolidated values are stored numbers, not formulas.
 - `WriteSource` deletes a report's rows across all runs, so only the latest run's lines are held. The run-level audit belongs to ticket 05.
+
+## 2026-10-28: Ticket 06, investigation tooling and before/after builds
+
+Built:
+- Variance views (migration 0005): `v_line_variance` (Summary line × source × rule, with the rule's label, Amount field, line count and amount) and `v_record_variance` (record_ref × Summary line, payments, settlements and difference).
+- `recon explain --line "<group>/<line>"` reads those views. It prints the Variance, the Contributions by rule on each side, the top 10 record_refs by absolute difference, and their source line numbers.
+- Interpretation-switch registry (`internal/mapping`). It is empty for now, so the fixed and baseline runs currently have the same switch set (none). `ingest --baseline` turns every switch off, and each run records its switch names and mode. The report header prints both.
+- `MAPPING_FIXES.sql` (empty, with the block format and a separate accounting-policy section), applied by `recon apply-fixes` in one transaction.
+- `make before` and `make after` each migrate `--reset`, seed the configs, and write `reports/before.xlsx` or `reports/after.xlsx`. `make after` applies `MAPPING_FIXES.sql` first.
+- Summary formula cells now cache a number rather than text. excelize writes `t="str"` on every formula, so the workbook is rewritten after save to drop it.
+
+Real files, `make before` and `make after` (both from scratch on database `recon_t06`):
+- Both builds reconcile the same: Components 212,118.95 (difference 0.00), 13,289 reconciled record_refs, 26 unreconciled payments, Transfer -133,756.51.
+- The two builds are identical because no fix exists yet. The after build will differ once fixes are added.
+
+`recon explain --line "Expenses/Amazon fees"` on the baseline (trimmed):
+
+```
+Expenses / Amazon fees  (Summary field expenses_amazon_fees, run 1)
+
+Payments     -266,349.92
+Settlements  -132,593.41
+Variance     -133,756.51
+
+Contributions by rule
+Side         Rule   Transaction type / description    Amount field  Amount       Lines
+Payments     P-110  (catch-all) / any                 total         -133,756.51  1
+...
+Top record_refs by absolute difference (1 shown)
+1. |90000000001|2026-07-18
+   difference -133,756.51 (payments -133,756.51, settlements 0.00)
+   payments lines:    amazon_payments_data.csv line 16605
+   settlement lines:  none
+```
+
+The Variance is the Transfer line (payments line 16605, release 18 Jul, record_ref with an empty order ID), falling to the Catch-all rule P-110. The rule-level detail shows the other Expenses contributions too (P-064, P-073, P-100 on payments; S-025, S-067 to S-070 on settlements). Those are for later investigation.
+
+Decisions made in this ticket:
+- The Catch-all's blank transaction type is labelled `(catch-all)` in the views and the explain output.
+- `make before` and `make after` use `--reset`, so each run starts from an empty database. Both need the database name to start with `recon`.
+
+Gaps, not closed in this ticket:
+- The switch registry is empty, so the `--baseline` and fixed runs cannot yet differ. A test with a registered switch would show that they do; for now the switch set is only checked as empty.
+- The Catch-all label is tested on the real files only. The synthetic fixtures never fire P-010 or any other Catch-all rule.
+- No mapping fixes exist yet, so the after build equals the before build.

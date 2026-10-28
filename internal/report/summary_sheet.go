@@ -33,7 +33,7 @@ func writeSummary(f *excelize.File, r recon.Report, bold, money int) error {
 		w.text(6+i, "B", field.label, 0)
 		w.text(6+i, "C", field.value, 0)
 	}
-	w.text(9, "B", summaryNote, 0)
+	w.text(10, "B", summaryNote, 0)
 
 	const header = 11
 	w.text(header, "B", "Summary", bold)

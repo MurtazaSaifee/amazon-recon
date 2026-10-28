@@ -44,9 +44,10 @@ type Report struct {
 	RunID          int64
 	StartedAt      time.Time
 	FinishedAt     time.Time
-	ConfigHash     string // SHA-256 (hex) of the mapping configs the run used
-	Mode           string // "fixed" or "baseline"
-	MalformedLines int    // malformed lines of both reports, all stored in ingest_errors
+	ConfigHash     string   // SHA-256 (hex) of the mapping configs the run used
+	Mode           string   // "fixed" or "baseline"
+	Switches       []string // enabled interpretation switches, sorted; empty for a baseline run
+	MalformedLines int      // malformed lines of both reports, all stored in ingest_errors
 	Settlement     SettlementHeader
 	Files          []FileRecord
 
@@ -78,8 +79,8 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 	if status != "complete" {
 		return Report{}, fmt.Errorf("run %d is %s, not complete", runID, status)
 	}
-	if err := pool.QueryRow(ctx, "SELECT COALESCE(config_hash, ''), mode FROM ingest_runs WHERE run_id = $1",
-		runID).Scan(&rep.ConfigHash, &rep.Mode); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT COALESCE(config_hash, ''), mode, switches FROM ingest_runs WHERE run_id = $1",
+		runID).Scan(&rep.ConfigHash, &rep.Mode, &rep.Switches); err != nil {
 		return Report{}, fmt.Errorf("config of run %d: %w", runID, err)
 	}
 
