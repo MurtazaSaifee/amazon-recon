@@ -3,11 +3,13 @@
 
 -- One row per run, Summary field, source and rule: the amount that rule routed to the field, and the number
 -- of distinct source lines behind it. rule_label is the rule as written in its config: transaction type and
--- description (payments), or transaction type, amount type and amount description (settlement).
+-- description (payments), or transaction type, amount type and amount description (settlement). A blank
+-- payments transaction type is the Catch-all, shown as "(catch-all)".
 -- summary_group and summary_line are blank for a field with no Summary line.
 CREATE VIEW v_line_variance AS
 WITH rule_labels AS (
-    SELECT 'payments'::TEXT AS source, rule_id, transaction_type || ' / ' || description AS rule_label
+    SELECT 'payments'::TEXT AS source, rule_id,
+           COALESCE(NULLIF(transaction_type, ''), '(catch-all)') || ' / ' || description AS rule_label
     FROM payment_mapping_rules
     UNION ALL
     SELECT 'settlement'::TEXT, rule_id, transaction_type || ' / ' || amount_type || ' / ' || amount_description
