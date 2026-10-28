@@ -3,7 +3,7 @@
 #   PG_PORT=55499 docker compose up -d
 services:
   postgres:
-    image: postgres:17
+    image: postgres:17-alpine
     environment:
       POSTGRES_USER: recon
       POSTGRES_PASSWORD: recon
