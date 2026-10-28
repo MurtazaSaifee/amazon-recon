@@ -1,0 +1,38 @@
+-- MAPPING_FIXES.sql: fixes to the mapping configs, applied after seed-config.
+--
+-- Applied by `recon apply-fixes --file MAPPING_FIXES.sql` (make after) in one transaction: every
+-- statement applies, or none does. Each UPDATE is guarded by its old value, so applying the file
+-- again changes nothing. Every change is recorded in mapping_rule_history.
+--
+-- Block format. One block per defect, in this shape:
+--
+--   -- Defect:          <short title>
+--   -- Kind:            mapping defect | interpretation defect | schema limitation
+--   -- Rule:            <rule ID, for example P-071>
+--   -- Old value:       <field> = '<old>'
+--   -- New value:       <field> = '<new>'
+--   -- Why:             <the evidence: why the old value is wrong>
+--   -- Variance closed: <Summary line, and its Variance before and after>
+--   UPDATE payment_mapping_rules
+--   SET <field> = '<new>'
+--   WHERE rule_id = '<rule>' AND <field> = '<old>';
+--
+-- The three defect kinds:
+--   mapping defect: a config row routes an amount to the wrong Summary field, or uses the wrong key.
+--     Fixed here, with an UPDATE of that row.
+--   interpretation defect: the matching logic gets a line wrong, for example a line matches no rule
+--     because its description is written differently. Fixed by a named interpretation switch in
+--     internal/mapping, not here. The block says which switch and has no UPDATE.
+--   schema limitation: the config schema cannot express what the report needs, for example one tax
+--     column that must route to two Summary fields. The block says why and has no UPDATE, because
+--     data alone cannot close it.
+--
+-- Accounting-policy calls are not objective fixes. They go in the separate section at the end of this
+-- file, with a recommendation and whether it was applied.
+
+-- ===== Objective fixes =====
+-- None yet. The baseline run is the reference: `make before` reproduces it.
+
+-- ===== Accounting-policy calls (separate; not objective fixes; each one needs a reviewer decision) =====
+-- None yet. A call is written here with its recommendation and "Applied: no" until a reviewer agrees,
+-- and its UPDATE stays commented out until then.
