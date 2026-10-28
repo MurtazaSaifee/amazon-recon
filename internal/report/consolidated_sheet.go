@@ -161,6 +161,29 @@ func writeConsolidated(f *excelize.File, r recon.Report, bold, money int) error 
 	})
 }
 
+// sampleHeaders spells the Summary-line headers of the Consolidated Data sheet as the sample workbook
+// does. The Summary sheet keeps the spelling of the Summary-line map; only these headers differ. Keyed by
+// group and line.
+var sampleHeaders = map[string]string{
+	"Sales/Amazon fees":                      "Amazon Fees",
+	"Sales/Cross-account Debt Adjustment":    "Cross-Account Debt Adjustment",
+	"Refunds/Refund expenses":                "Refund Expenses",
+	"Refunds/Refunded sales":                 "Refunded Sales",
+	"Expenses/Promo rebates":                 "Promo Rebates",
+	"Expenses/FBA fees":                      "FBA Fees",
+	"Expenses/Amazon fees":                   "Amazon Fees",
+	"Expenses/Cross-account Debt Adjustment": "Cross-Account Debt Adjustment",
+}
+
+// headerText is the Consolidated header of a slot: the sample's spelling where the sample has one,
+// otherwise the slot's own label.
+func headerText(s slot) string {
+	if h, ok := sampleHeaders[s.group+"/"+s.label]; ok {
+		return h
+	}
+	return s.label
+}
+
 // summarySlots makes one slot per Summary line, in display order.
 func summarySlots(lines []recon.SummaryLine) []slot {
 	out := make([]slot, len(lines))
@@ -195,15 +218,15 @@ func (w *sheetWriter) header(c consolidatedCols, summary, unmapped []slot, bold 
 	w.text(consolidatedHeaderRow, colName(c.payLines), "Payments source lines", bold)
 	w.text(consolidatedHeaderRow, colName(c.setLines), "Settlement source lines", bold)
 	for i, s := range summary {
-		w.text(consolidatedHeaderRow, colName(c.paySum+i), s.label, bold)
-		w.text(consolidatedHeaderRow, colName(c.setSum+i), s.label, bold)
+		w.text(consolidatedHeaderRow, colName(c.paySum+i), headerText(s), bold)
+		w.text(consolidatedHeaderRow, colName(c.setSum+i), headerText(s), bold)
 	}
 	for i, s := range unmapped {
-		w.text(consolidatedHeaderRow, colName(c.payUnm+i), s.label, bold)
-		w.text(consolidatedHeaderRow, colName(c.setUnm+i), s.label, bold)
+		w.text(consolidatedHeaderRow, colName(c.payUnm+i), headerText(s), bold)
+		w.text(consolidatedHeaderRow, colName(c.setUnm+i), headerText(s), bold)
 	}
 	for i, s := range append(append([]slot{}, summary...), unmapped...) {
-		w.text(consolidatedHeaderRow, colName(c.diff+i), s.label+" (DS1-DS2)", bold)
+		w.text(consolidatedHeaderRow, colName(c.diff+i), headerText(s)+" (DS1-DS2)", bold)
 	}
 }
 
