@@ -15,8 +15,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
+	"amazonrecon/internal/mapping"
 	"amazonrecon/internal/source"
 )
+
+// batchSize bounds how many lines are written, and how many Contributions are
+// held in memory, at a time. Every batch lands in the ingest transaction.
+const batchSize = 5000
 
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
@@ -140,37 +145,110 @@ func RecordFile(ctx context.Context, tx pgx.Tx, runID int64, f FileRecord) error
 	return err
 }
 
-// SourceRow is one line ready to store, with its scope decided.
+// SourceRow is one line ready to store, with its scope decided and, for a
+// Transaction line or a Component, its mapping result.
 type SourceRow struct {
 	FileName    string
 	Line        source.Line
 	InScope     bool
 	ScopeReason string
+	Mapping     *mapping.Result // nil for the Settlement header, which is not mapped
 }
 
-// ReplaceSourceLines replaces every stored line of one report with rows, inside tx.
+// Contribution is one routed amount of an in-scope line, ready to store.
+type Contribution struct {
+	Source       string
+	LineNumber   int
+	RuleID       string
+	AmountField  string
+	Amount       decimal.Decimal
+	SummaryField string
+}
+
+// WriteSource replaces every stored line of one report with rows, and writes the
+// Contributions and running Summary totals of its in-scope lines, in batches inside tx.
 // Re-ingesting a report therefore never double-counts.
-func ReplaceSourceLines(ctx context.Context, tx pgx.Tx, runID int64, reportSource string, rows []SourceRow) error {
+func WriteSource(ctx context.Context, tx pgx.Tx, runID int64, reportSource string, rows []SourceRow) error {
 	if _, err := tx.Exec(ctx, "DELETE FROM source_rows WHERE source = $1", reportSource); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ctx, "DELETE FROM summary_running WHERE source = $1", reportSource); err != nil {
+		return err
+	}
+	for start := 0; start < len(rows); start += batchSize {
+		end := min(start+batchSize, len(rows))
+		if err := writeBatch(ctx, tx, runID, reportSource, rows[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeBatch stores one batch of lines, its Contributions, and adds its routed amounts to the running totals.
+func writeBatch(ctx context.Context, tx pgx.Tx, runID int64, reportSource string, rows []SourceRow) error {
 	copyRows := make([][]any, 0, len(rows))
+	var contributions [][]any
+	totals := map[string]decimal.Decimal{}
+	var fields []string
 	for _, r := range rows {
 		v, err := sourceRowValues(runID, r)
 		if err != nil {
 			return err
 		}
 		copyRows = append(copyRows, v)
+		if !r.InScope || r.Mapping == nil {
+			continue
+		}
+		for _, c := range r.Mapping.Contributions {
+			amount, err := numeric(c.Amount)
+			if err != nil {
+				return err
+			}
+			contributions = append(contributions, []any{runID, reportSource, r.Line.LineNumber, c.RuleID, c.AmountField, amount, c.SummaryField})
+			if _, ok := totals[c.SummaryField]; !ok {
+				fields = append(fields, c.SummaryField)
+			}
+			totals[c.SummaryField] = totals[c.SummaryField].Add(c.Amount)
+		}
 	}
-	_, err := tx.CopyFrom(ctx, pgx.Identifier{"source_rows"}, sourceRowColumns, pgx.CopyFromRows(copyRows))
-	return err
+	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"source_rows"}, sourceRowColumns, pgx.CopyFromRows(copyRows)); err != nil {
+		return fmt.Errorf("store %s lines: %w", reportSource, err)
+	}
+	if len(contributions) > 0 {
+		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"summary_contributions"},
+			[]string{"run_id", "source", "line_number", "rule_id", "amount_field", "amount", "summary_field"},
+			pgx.CopyFromRows(contributions)); err != nil {
+			return fmt.Errorf("store %s contributions: %w", reportSource, err)
+		}
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for _, field := range fields {
+		amount, err := numeric(totals[field])
+		if err != nil {
+			return err
+		}
+		batch.Queue(`INSERT INTO summary_running (run_id, source, summary_field, amount) VALUES ($1, $2, $3, $4)
+			ON CONFLICT (run_id, source, summary_field) DO UPDATE SET amount = summary_running.amount + EXCLUDED.amount`,
+			runID, reportSource, field, amount)
+	}
+	results := tx.SendBatch(ctx, batch)
+	defer results.Close()
+	for range fields {
+		if _, err := results.Exec(); err != nil {
+			return fmt.Errorf("update running totals: %w", err)
+		}
+	}
+	return nil
 }
 
 var sourceRowColumns = []string{
 	"run_id", "source", "line_kind", "file_name", "line_number", "raw_payload",
 	"settlement_id", "txn_type", "amount_type", "description", "txn_ref", "sku", "status",
 	"amount", "posted_date", "posted_date_basis", "currency", "period_start", "period_end", "deposit_date",
-	"in_scope", "scope_reason",
+	"in_scope", "scope_reason", "record_ref", "precedence_tier", "matched_rule_ids", "warnings",
 }
 
 func sourceRowValues(runID int64, r SourceRow) ([]any, error) {
@@ -183,13 +261,28 @@ func sourceRowValues(runID int64, r SourceRow) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	var recordRef, tier, rules, warnings any
+	if m := r.Mapping; m != nil {
+		recordRef = nullable(m.RecordRef)
+		tier = int16(m.Tier)
+		if len(m.MatchedRuleIDs) > 0 {
+			rules = m.MatchedRuleIDs
+		}
+		var ws []string
+		for _, w := range m.Warnings {
+			ws = append(ws, w.String())
+		}
+		if len(ws) > 0 {
+			warnings = ws
+		}
+	}
 	return []any{
 		runID, l.Source, l.Kind, r.FileName, l.LineNumber, raw,
 		nullable(l.SettlementID), nullable(l.TxnType), nullable(l.AmountType), nullable(l.Description),
 		nullable(l.TxnRef), nullable(l.SKU), nullable(l.Status),
 		amount, optTime(l.PostedDate), nullable(l.PostedDateBasis),
 		nullable(l.Currency), optTime(l.PeriodStart), optTime(l.PeriodEnd), optTime(l.DepositDate),
-		r.InScope, r.ScopeReason,
+		r.InScope, r.ScopeReason, recordRef, tier, rules, warnings,
 	}, nil
 }
 
@@ -240,24 +333,31 @@ type Line struct {
 	PostedDateBasis string
 	InScope         bool
 	ScopeReason     string
+	RecordRef       string   // empty when the line is unmapped
+	MatchedRuleIDs  []string // every rule in the winning tier
+	Warnings        []string
 }
 
 // LoadLine reads one stored line of a run.
 func LoadLine(ctx context.Context, pool *pgxpool.Pool, runID int64, reportSource string, lineNumber int) (Line, error) {
 	var (
-		l      Line
-		amount *string
-		posted *time.Time
-		basis  *string
+		l         Line
+		amount    *string
+		posted    *time.Time
+		basis     *string
+		recordRef *string
 	)
 	err := pool.QueryRow(ctx, `SELECT source, line_kind, file_name, line_number, amount::text,
-			posted_date, posted_date_basis, in_scope, scope_reason
+			posted_date, posted_date_basis, in_scope, scope_reason, record_ref, matched_rule_ids, warnings
 		FROM source_rows WHERE run_id = $1 AND source = $2 AND line_number = $3`,
 		runID, reportSource, lineNumber).Scan(
 		&l.Source, &l.LineKind, &l.FileName, &l.LineNumber, &amount,
-		&posted, &basis, &l.InScope, &l.ScopeReason)
+		&posted, &basis, &l.InScope, &l.ScopeReason, &recordRef, &l.MatchedRuleIDs, &l.Warnings)
 	if err != nil {
 		return Line{}, fmt.Errorf("load %s line %d: %w", reportSource, lineNumber, err)
+	}
+	if recordRef != nil {
+		l.RecordRef = *recordRef
 	}
 	if amount != nil {
 		l.Amount, err = decimal.NewFromString(*amount)

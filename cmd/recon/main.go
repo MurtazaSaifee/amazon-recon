@@ -28,9 +28,10 @@ import (
 )
 
 const usage = `usage:
-  recon migrate [--db URL] [--reset [--force-reset]]
-  recon ingest  [--db URL] [--input-dir DIR] [--payments FILE] [--settlement FILE]
-  recon report  [--db URL] [--out PATH]
+  recon migrate     [--db URL] [--reset [--force-reset]]
+  recon seed-config [--db URL] [--input-dir DIR] [--payments-config FILE] [--settlement-config FILE] [--summary-map FILE]
+  recon ingest      [--db URL] [--input-dir DIR] [--payments FILE] [--settlement FILE]
+  recon report      [--db URL] [--out PATH]
 `
 
 func main() {
@@ -43,6 +44,8 @@ func main() {
 	switch os.Args[1] {
 	case "migrate":
 		err = cmdMigrate(ctx, os.Args[2:])
+	case "seed-config":
+		err = cmdSeedConfig(ctx, os.Args[2:])
 	case "ingest":
 		err = cmdIngest(ctx, os.Args[2:])
 	case "report":
@@ -114,6 +117,34 @@ func cmdMigrate(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Println("migrations are up to date")
+	return nil
+}
+
+// cmdSeedConfig loads the two mapping configs and the Summary-line map into their tables.
+// Each file is read as given, so a rule's ID is its CSV line number.
+func cmdSeedConfig(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("seed-config", flag.ExitOnError)
+	db := dbFlag(fs)
+	inputDir := fs.String("input-dir", "Assignment_050726_files", "directory holding the two configs")
+	payments := fs.String("payments-config", "amazon_payment_configs_au_old.csv", "payments mapping config file name")
+	settlement := fs.String("settlement-config", "amazon_settlement_configs_au.csv", "settlement mapping config file name")
+	summaryMap := fs.String("summary-map", filepath.Join("configs", "summary_line_map.csv"), "Summary-line map CSV")
+	fs.Parse(args)
+
+	pool, err := connect(ctx, *db)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	if err := store.SeedConfig(ctx, pool, store.ConfigFiles{
+		Payments:   filepath.Join(*inputDir, *payments),
+		Settlement: filepath.Join(*inputDir, *settlement),
+		SummaryMap: *summaryMap,
+	}); err != nil {
+		return err
+	}
+	fmt.Println("mapping configs and Summary-line map seeded")
 	return nil
 }
 
