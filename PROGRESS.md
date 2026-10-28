@@ -56,3 +56,16 @@ Other settled points:
 - **Robustness.** `ingest_runs` makes re-runs safe (a file's rows are replaced in one transaction). Malformed lines go to `ingest_errors`. A change log on the config tables records every config change.
 - **Data handling.** The input files carry buyer city, state and postcode alongside order IDs. The repo is public, so it contains no input data, full dump or generated reports. Those go with the submission email. Tests use small synthetic fixtures built to the same file shapes.
 - **AI.** There is no LLM in the money path. Claude Code is used for exploration and for adversarial checking of hypotheses. An optional `suggest` command comes only if time allows.
+
+## 2026-10-28: Ticket 01, tracer bullet (raw lines tie to the Settlement total)
+
+- The first ingest run on the real payments file failed. Its GMT+9 timestamps use both full and abbreviated months ("3 July 2026" and "1 Aug 2026"), and the reader had only handled full names. It refused 1,153 lines and replaced nothing, which is the intended failure. Both spellings are now accepted and the file has no malformed lines.
+- `make run` on the real input (ticket database, from scratch):
+  - Settlement total (header) 212,118.95.
+  - In-scope Components 212,118.95 over 54,979 lines, difference 0.00.
+  - In-scope Released excluding Transfer 212,118.95 over 13,471 lines, difference 0.00.
+  - Transfer (in scope) -133,756.51, one line. Released including Transfer 78,362.44 over 13,472 lines.
+  - Deferred memo (out of scope) 43,540.07 over 2,398 lines.
+- Scope: 13,472 Released, 2,398 Deferred and 7,156 other-Settlement payments lines, which total 23,026. Settlement: 54,979 components in scope plus the header.
+- Re-ingesting the same files keeps the stored rows at 78,006 (23,026 payments plus 54,980 settlement), so nothing is double-counted.
+- Synthetic fixtures copy the real shapes: BOM, 9-line preamble, quoted thousands, release times either side of midnight UTC and exactly at midnight, Deferred lines, another Settlement, the header line and a Transfer line.
