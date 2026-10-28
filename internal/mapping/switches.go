@@ -16,8 +16,19 @@ type SwitchInfo struct {
 	Default     bool
 }
 
-// knownSwitches is the registry of named switches. It is empty for now.
-var knownSwitches = map[Switch]SwitchInfo{}
+// PrefixBeforeCatchAll names the switch that lets a rule of the same transaction type match a line
+// whose description starts with the rule's description followed by "_" or ":". It is tried after the
+// type rules (exact and wildcard) and before the Catch-all, so a rule is no longer skipped for the
+// Catch-all just because the config author wrote its description as a prefix of the real text.
+const PrefixBeforeCatchAll Switch = "prefix_before_catch_all"
+
+// knownSwitches is the registry of named switches.
+var knownSwitches = map[Switch]SwitchInfo{
+	PrefixBeforeCatchAll: {
+		Description: "match a rule whose description is a prefix of the line's description (followed by _ or :) before the Catch-all",
+		Default:     true,
+	},
+}
 
 // SwitchesFor returns the switches a run uses. A baseline run has none. A fixed
 // run has every registered switch whose default is on.

@@ -13,6 +13,9 @@ const (
 	TierTypeDescription
 	// TierTypeWildcard is (transaction type, any).
 	TierTypeWildcard
+	// TierTypePrefix is (transaction type, a rule description that the line's description starts
+	// with, followed by "_" or ":"). Only used when the switch prefix_before_catch_all is on.
+	TierTypePrefix
 	// TierCatchAllDescription is (empty type, exact description).
 	TierCatchAllDescription
 	// TierCatchAllWildcard is (empty type, any).
@@ -25,6 +28,8 @@ func (t Tier) String() string {
 		return "type+description"
 	case TierTypeWildcard:
 		return "type+any"
+	case TierTypePrefix:
+		return "type+prefix"
 	case TierCatchAllDescription:
 		return "catch-all+description"
 	case TierCatchAllWildcard:

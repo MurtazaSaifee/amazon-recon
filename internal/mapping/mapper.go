@@ -98,7 +98,7 @@ func (m *Mapper) MapComponent(c Component) Result {
 // mapLine applies the precedence tiers, builds the record_ref, routes every
 // rule in the winning tier, and collects warnings.
 func (m *Mapper) mapLine(ix index, side string, keys Keys, txnType, qualifier, desc string, value func(compiled) decimal.Decimal) Result {
-	tier, rules := ix.match(txnType, qualifier, desc)
+	tier, rules := ix.match(txnType, qualifier, desc, m.switches.Enabled(PrefixBeforeCatchAll))
 	if tier == TierUnmapped {
 		return Result{
 			Tier: TierUnmapped,
@@ -142,9 +142,10 @@ func (m *Mapper) mapLine(ix index, side string, keys Keys, txnType, qualifier, d
 }
 
 // match returns the highest tier with any matching rule and its rules, in
-// config order. Tiers 1 and 2 need a non-empty transaction type; tiers 3 and
-// 4 use the Catch-all (empty type).
-func (ix index) match(txnType, qualifier, desc string) (Tier, []compiled) {
+// config order. Tiers 1 and 2 need a non-empty transaction type. The prefix
+// tier (only when prefix is on) comes after them and before the Catch-all.
+// The last two tiers use the Catch-all (empty type).
+func (ix index) match(txnType, qualifier, desc string, prefix bool) (Tier, []compiled) {
 	if txnType != "" {
 		exact, wild := pick(ix[txnType], qualifier, desc)
 		if len(exact) > 0 {
@@ -152,6 +153,11 @@ func (ix index) match(txnType, qualifier, desc string) (Tier, []compiled) {
 		}
 		if len(wild) > 0 {
 			return TierTypeWildcard, wild
+		}
+		if prefix {
+			if pre := prefixPick(ix[txnType], qualifier, desc); len(pre) > 0 {
+				return TierTypePrefix, pre
+			}
 		}
 	}
 	exact, wild := pick(ix[""], qualifier, desc)
@@ -179,6 +185,39 @@ func pick(rules []compiled, qualifier, desc string) (exact, wild []compiled) {
 		}
 	}
 	return exact, wild
+}
+
+// prefixPick returns the non-wildcard rules of one type whose description is the longest prefix of
+// desc that ends at a "_" or ":" boundary, keeping only rules whose qualifier equals the line's.
+// Rules that share the longest prefix all match, as exact rules do in tier 1.
+func prefixPick(rules []compiled, qualifier, desc string) []compiled {
+	var best []compiled
+	bestLen := 0
+	for _, r := range rules {
+		if r.qualifier != qualifier || r.wildcard || !atPrefixBoundary(desc, r.desc) {
+			continue
+		}
+		switch {
+		case len(r.desc) > bestLen:
+			best, bestLen = []compiled{r}, len(r.desc)
+		case len(r.desc) == bestLen:
+			best = append(best, r)
+		}
+	}
+	return best
+}
+
+// atPrefixBoundary reports whether prefix is a leading part of desc that ends
+// where desc continues with "_" or ":". An empty prefix never matches.
+func atPrefixBoundary(desc, prefix string) bool {
+	if prefix == "" || !strings.HasPrefix(desc, prefix) {
+		return false
+	}
+	if len(desc) == len(prefix) {
+		return true
+	}
+	c := desc[len(prefix)]
+	return c == '_' || c == ':'
 }
 
 // multiRuleWarnings warns once per Amount field that two or more matched
