@@ -32,6 +32,7 @@ const usage = `usage:
   recon seed-config [--db URL] [--input-dir DIR] [--payments-config FILE] [--settlement-config FILE] [--summary-map FILE]
   recon ingest      [--db URL] [--input-dir DIR] [--payments FILE] [--settlement FILE]
   recon report      [--db URL] [--out PATH]
+  recon counts      [--db URL]
 `
 
 func main() {
@@ -50,6 +51,8 @@ func main() {
 		err = cmdIngest(ctx, os.Args[2:])
 	case "report":
 		err = cmdReport(ctx, os.Args[2:])
+	case "counts":
+		err = cmdCounts(ctx, os.Args[2:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -202,6 +205,41 @@ func cmdReport(ctx context.Context, args []string) error {
 	return nil
 }
 
+// cmdCounts prints the reconciliation counts per status for the latest complete run.
+func cmdCounts(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("counts", flag.ExitOnError)
+	db := dbFlag(fs)
+	fs.Parse(args)
+
+	pool, err := connect(ctx, *db)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	runID, err := store.LatestCompleteRun(ctx, pool)
+	if err != nil {
+		return err
+	}
+	rep, err := recon.Build(ctx, pool, runID)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Run %d, Settlement %s\n", rep.RunID, rep.Settlement.ID)
+	printCounts(rep.Reconciliation.Counts)
+	return nil
+}
+
+func printCounts(c recon.Counts) {
+	fmt.Println("Reconciliation counts (record_refs):")
+	fmt.Printf("  %-28s %6d\n", "Reconciled", c.Reconciled)
+	fmt.Printf("  %-28s %6d\n", "Reconciled with difference", c.ReconciledWithDifference)
+	fmt.Printf("  %-28s %6d\n", "Unreconciled payment", c.UnreconciledPayment)
+	fmt.Printf("  %-28s %6d\n", "Unreconciled settlement", c.UnreconciledSettlement)
+	fmt.Printf("  %-28s %6d lines (payments %d, settlements %d; no record_ref)\n", "Unmapped",
+		c.UnmappedPayments+c.UnmappedSettlements, c.UnmappedPayments, c.UnmappedSettlements)
+}
+
 func printTieOut(r recon.Report, out string) {
 	fmt.Printf("Run %d, Settlement %s (period %s to %s UTC, deposit %s UTC)\n", r.RunID, r.Settlement.ID,
 		r.Settlement.PeriodStart.Format("2006-01-02"), r.Settlement.PeriodEnd.Format("2006-01-02"),
@@ -216,6 +254,7 @@ func printTieOut(r recon.Report, out string) {
 		}
 		fmt.Printf("  %-56s %18s   %6d %s\n", label, report.FormatAmount(t.Amount), t.Count, unit)
 	}
+	printCounts(r.Reconciliation.Counts)
 	amount("Settlement total (Settlement report header)", r.Settlement.Total)
 	total("In-scope Components", r.Components)
 	amount("  minus Settlement total (should be 0.00)", r.ComponentsMinusTotal)
