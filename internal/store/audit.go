@@ -36,9 +36,13 @@ func RecordErrors(ctx context.Context, pool *pgxpool.Pool, runID int64, lines []
 	return err
 }
 
-// SetRunConfig records the config hash and mode a run was produced with.
-func SetRunConfig(ctx context.Context, tx pgx.Tx, runID int64, configHash, mode string) error {
-	_, err := tx.Exec(ctx, "UPDATE ingest_runs SET config_hash = $2, mode = $3 WHERE run_id = $1", runID, configHash, mode)
+// SetRunConfig records the config hash, mode and enabled interpretation switches a run was produced with.
+func SetRunConfig(ctx context.Context, tx pgx.Tx, runID int64, configHash, mode string, switches []string) error {
+	if switches == nil {
+		switches = []string{}
+	}
+	_, err := tx.Exec(ctx, "UPDATE ingest_runs SET config_hash = $2, mode = $3, switches = $4 WHERE run_id = $1",
+		runID, configHash, mode, switches)
 	return err
 }
 

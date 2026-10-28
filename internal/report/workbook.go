@@ -99,7 +99,7 @@ func WriteWorkbook(path string, r recon.Report) error {
 		w.text(8+i, "B", field.value, 0)
 	}
 	for i, file := range r.Files {
-		row := 11 + i
+		row := 12 + i
 		w.text(row, "A", file.Source+" file", 0)
 		w.text(row, "B", file.FileName, 0)
 		w.text(row, "C", fmt.Sprintf("sha256 %s; %d physical lines, %d stored",
