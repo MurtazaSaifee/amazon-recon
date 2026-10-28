@@ -19,7 +19,7 @@ import (
 	"amazonrecon/internal/store"
 )
 
-// Inputs names the two report files.
+// Inputs names the two report files and the mode the run is recorded with.
 type Inputs struct {
 	PaymentsPath   string
 	SettlementPath string
@@ -31,11 +31,13 @@ type Result struct {
 	SettlementID    string
 	PaymentsLines   int // payments lines stored, in or out of scope
 	SettlementLines int // settlement lines stored, header included
+	Malformed       int // malformed lines of both reports, all stored in ingest_errors
 }
 
 // Run ingests both reports as one run. It replaces the stored lines of both
-// reports in a single transaction. If any line is malformed, the run fails
-// and no stored lines are replaced.
+// reports in a single transaction. Malformed lines are stored in ingest_errors
+// and ingestion continues. The run fails, and no stored lines are replaced, if
+// any malformed line is in scope or its scope cannot be read.
 func Run(ctx context.Context, pool *pgxpool.Pool, in Inputs) (Result, error) {
 	runID, err := store.BeginRun(ctx, pool)
 	if err != nil {
@@ -74,16 +76,19 @@ func run(ctx context.Context, pool *pgxpool.Pool, runID int64, in Inputs) (Resul
 		return Result{}, err
 	}
 
-	malformed := append(append([]source.ParseError{}, settle.Errors...), pay.Errors...)
+	headerID := settle.Header.SettlementID
+	malformed := append(malformedLines(setDigest.name, settle.Errors, headerID),
+		malformedLines(payDigest.name, pay.Errors, headerID)...)
 	if len(malformed) > 0 {
 		if err := store.RecordErrors(ctx, pool, runID, malformed); err != nil {
 			return Result{}, fmt.Errorf("record malformed lines: %w", err)
 		}
-		return Result{}, fmt.Errorf("%d malformed lines (first: %s); no lines were replaced, see ingest_errors",
-			len(malformed), malformed[0])
 	}
-
-	headerID := settle.Header.SettlementID
+	if n := blockingCount(malformed); n > 0 {
+		first := firstInScope(malformed)
+		return Result{Malformed: len(malformed)}, fmt.Errorf("%d malformed lines are in scope (first: %s line %d: %s); no lines were replaced, see ingest_errors",
+			n, first.FileName, first.LineNumber, first.Reason)
+	}
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -118,13 +123,14 @@ func run(ctx context.Context, pool *pgxpool.Pool, runID int64, in Inputs) (Resul
 
 	if err := store.RecordFile(ctx, tx, runID, store.FileRecord{
 		Source: source.Payments, FileName: payDigest.name, SHA256: payDigest.sha,
-		PhysicalLines: payDigest.lines, StoredLines: len(paymentRows), Preamble: pay.Preamble,
+		PhysicalLines: payDigest.lines, StoredLines: len(paymentRows), MalformedLines: len(pay.Errors),
+		Preamble: pay.Preamble,
 	}); err != nil {
 		return Result{}, fmt.Errorf("record payments file: %w", err)
 	}
 	if err := store.RecordFile(ctx, tx, runID, store.FileRecord{
 		Source: source.Settlement, FileName: setDigest.name, SHA256: setDigest.sha,
-		PhysicalLines: setDigest.lines, StoredLines: len(settlementRows),
+		PhysicalLines: setDigest.lines, StoredLines: len(settlementRows), MalformedLines: len(settle.Errors),
 	}); err != nil {
 		return Result{}, fmt.Errorf("record settlement file: %w", err)
 	}
@@ -137,7 +143,22 @@ func run(ctx context.Context, pool *pgxpool.Pool, runID int64, in Inputs) (Resul
 	if err := tx.Commit(ctx); err != nil {
 		return Result{}, fmt.Errorf("commit: %w", err)
 	}
-	return Result{SettlementID: headerID, PaymentsLines: len(paymentRows), SettlementLines: len(settlementRows)}, nil
+	return Result{
+		SettlementID:    headerID,
+		PaymentsLines:   len(paymentRows),
+		SettlementLines: len(settlementRows),
+		Malformed:       len(malformed),
+	}, nil
+}
+
+// firstInScope returns the first malformed line that blocks the run.
+func firstInScope(lines []store.MalformedLine) store.MalformedLine {
+	for _, l := range lines {
+		if l.InScope {
+			return l
+		}
+	}
+	return store.MalformedLine{}
 }
 
 // scopedRow decides a line's scope. Scope is the Settlement ID from the

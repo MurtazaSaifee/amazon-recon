@@ -64,6 +64,11 @@ type ParseError struct {
 	LineNumber int
 	Raw        string
 	Reason     string
+
+	// SettlementID and Status are the cells that could still be read from the
+	// line, empty when they could not. Together they decide the line's scope.
+	SettlementID string
+	Status       string // payments only
 }
 
 func (e ParseError) Error() string {
