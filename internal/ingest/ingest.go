@@ -19,19 +19,28 @@ import (
 	"amazonrecon/internal/store"
 )
 
+// Run modes, recorded on each run. Baseline turns the interpretation switches off.
+const (
+	ModeFixed    = "fixed"
+	ModeBaseline = "baseline"
+)
+
 // Inputs names the two report files and the mode the run is recorded with.
 type Inputs struct {
 	PaymentsPath   string
 	SettlementPath string
+	Mode           string // ModeFixed or ModeBaseline; empty means ModeFixed
 }
 
 // Result is what a successful ingest run produced.
 type Result struct {
 	RunID           int64
 	SettlementID    string
-	PaymentsLines   int // payments lines stored, in or out of scope
-	SettlementLines int // settlement lines stored, header included
-	Malformed       int // malformed lines of both reports, all stored in ingest_errors
+	PaymentsLines   int    // payments lines stored, in or out of scope
+	SettlementLines int    // settlement lines stored, header included
+	Malformed       int    // malformed lines of both reports, all stored in ingest_errors
+	ConfigHash      string // SHA-256 of the mapping configs the run used
+	Mode            string
 }
 
 // Run ingests both reports as one run. It replaces the stored lines of both
@@ -39,6 +48,12 @@ type Result struct {
 // and ingestion continues. The run fails, and no stored lines are replaced, if
 // any malformed line is in scope or its scope cannot be read.
 func Run(ctx context.Context, pool *pgxpool.Pool, in Inputs) (Result, error) {
+	if in.Mode == "" {
+		in.Mode = ModeFixed
+	}
+	if in.Mode != ModeFixed && in.Mode != ModeBaseline {
+		return Result{}, fmt.Errorf("unknown mode %q: want %q or %q", in.Mode, ModeFixed, ModeBaseline)
+	}
 	runID, err := store.BeginRun(ctx, pool)
 	if err != nil {
 		return Result{}, fmt.Errorf("begin run: %w", err)
@@ -101,6 +116,13 @@ func run(ctx context.Context, pool *pgxpool.Pool, runID int64, in Inputs) (Resul
 	if err != nil {
 		return Result{}, err
 	}
+	configHash, err := store.ConfigHash(ctx, tx)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := store.SetRunConfig(ctx, tx, runID, configHash, in.Mode); err != nil {
+		return Result{}, fmt.Errorf("record run config: %w", err)
+	}
 	mapper := mapping.NewMapper(payRules, setRules, nil)
 
 	settlementRows := make([]store.SourceRow, 0, 1+len(settle.Components))
@@ -148,6 +170,8 @@ func run(ctx context.Context, pool *pgxpool.Pool, runID int64, in Inputs) (Resul
 		PaymentsLines:   len(paymentRows),
 		SettlementLines: len(settlementRows),
 		Malformed:       len(malformed),
+		ConfigHash:      configHash,
+		Mode:            in.Mode,
 	}, nil
 }
 
