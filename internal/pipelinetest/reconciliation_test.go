@@ -7,9 +7,11 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/xuri/excelize/v2"
 
 	"amazonrecon/internal/ingest"
 	"amazonrecon/internal/recon"
+	"amazonrecon/internal/report"
 )
 
 // The reconciliation fixtures (testdata/fixtures/reconciliation_*) hold one line of each outcome.
@@ -23,14 +25,33 @@ import (
 //	Unmapped                    the Refund component (settlement line 6) and the Service fee (settlement line 9)
 //	Out of scope                Deferred lines 16 and 17, Other settlement line 18
 const (
-	reconRefundRef   = "701-0000002-0000002|SYN-B-002|2026-07-04"
-	reconOrderARef   = "701-0000001-0000001|SYN-A-001|2026-07-02"
-	reconOrderBRef   = "701-0000002-0000002|SYN-B-002|2026-07-03"
-	reconOrderCRef   = "701-0000003-0000003|SYN-C-003|2026-07-04"
-	reconTransferRef = "TRANSFER|12000000003|2026-07-05"
-	reconOrderFRef   = "701-0000006-0000006|SYN-F-006|2026-07-05"
-	reconOrderGRef   = "701-0000007-0000007|SYN-G-007|2026-07-06"
+	reconSettlementID = "12000000003"
+	reconRefundRef    = "701-0000002-0000002|SYN-B-002|2026-07-04"
+	reconOrderARef    = "701-0000001-0000001|SYN-A-001|2026-07-02"
+	reconOrderBRef    = "701-0000002-0000002|SYN-B-002|2026-07-03"
+	reconOrderCRef    = "701-0000003-0000003|SYN-C-003|2026-07-04"
+	reconTransferRef  = "TRANSFER|12000000003|2026-07-05"
+	reconOrderFRef    = "701-0000006-0000006|SYN-F-006|2026-07-05"
+	reconOrderGRef    = "701-0000007-0000007|SYN-G-007|2026-07-06"
 )
+
+// The Consolidated Data header row, as the sample lays it out (the payments and settlement
+// columns, the status, the total difference and the per-line differences), keyed by column letter.
+var consolidatedHeaders = map[string]string{
+	"A": "Date", "B": "date/time", "C": "Transaction Status", "D": "Transaction Release Date",
+	"E": "settlement id", "F": "type", "G": "order id", "H": "sku", "I": "description", "J": "Quantity",
+	"K": "marketplace", "L": "account type", "M": "fulfillment", "N": "order city", "O": "order state",
+	"P": "order postal", "Q": "tax collection model", "R": "Total",
+	"S": "Product Charges", "T": "Tax", "AM": "Paid To Amazon",
+	// The one routed Summary field with no Summary line gets a column on each side, after the Summary lines.
+	"AN": "bank_account_transfer_round_off",
+	"AO": "settlement-id", "AP": "settlement-start-date", "BI": "promotion-id", "BJ": "Total",
+	"BK": "Product Charges", "CE": "Paid To Amazon",
+	"CF": "bank_account_transfer_round_off",
+	"CG": "Reconciliation Status", "CH": "total (DS1-DS2)", "CI": "Product Charges (DS1-DS2)",
+	"DD": "bank_account_transfer_round_off (DS1-DS2)",
+	"DE": "record_ref", "DF": "Payments source lines", "DG": "Settlement source lines",
+}
 
 func TestReconciliationOutcomes(t *testing.T) {
 	ctx := context.Background()
@@ -138,6 +159,70 @@ func TestReconciliationOutcomes(t *testing.T) {
 	})
 }
 
+func TestConsolidatedSheet(t *testing.T) {
+	ctx := context.Background()
+	pool := newPipelineDB(t)
+	res := ingestReconFixtures(t, pool)
+	rep, err := recon.Build(ctx, pool, res.RunID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "recon.xlsx")
+	if err := report.WriteWorkbook(path, rep); err != nil {
+		t.Fatalf("write workbook: %v", err)
+	}
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		t.Fatalf("open workbook: %v", err)
+	}
+	defer f.Close()
+
+	t.Run("Consolidated Data follows the sample's column order", func(t *testing.T) {
+		rows := sheetRows(t, f, "Consolidated Data")
+		header := rows[consolidatedHeaderRow-1]
+		for col, want := range consolidatedHeaders {
+			if got := cellAt(header, col); got != want {
+				t.Errorf("header %s = %q, want %q", col, got, want)
+			}
+		}
+	})
+
+	t.Run("each consolidated row carries its totals, status and source line numbers", func(t *testing.T) {
+		rows := sheetRows(t, f, "Consolidated Data")
+		row := findConsolidatedRow(t, rows, reconOrderARef)
+		want := map[string]string{
+			"CG": "Reconciled", "R": "1234.56", "BJ": "1234.56", "CH": "0.00",
+			"S": "1000.00", "BK": "1000.00", "T": "469.12", "BL": "234.56",
+			"DF": "11", "DG": "3,4",
+		}
+		for col, v := range want {
+			if got := cellAt(row, col); got != v {
+				t.Errorf("record A column %s = %q, want %q", col, got, v)
+			}
+		}
+	})
+
+	t.Run("a routed Summary field with no Summary line is kept in its own columns", func(t *testing.T) {
+		// The Transfer routes -500.00 to bank_account_transfer_round_off, which has no Summary line.
+		rows := sheetRows(t, f, "Consolidated Data")
+		row := findConsolidatedRow(t, rows, reconTransferRef)
+		want := map[string]string{
+			"AN": "-500.00", // payments side
+			"CF": "",        // settlement side has no lines for this record
+			"DD": "-500.00", // difference: payments minus settlements
+		}
+		for col, v := range want {
+			if got := cellAt(row, col); got != v {
+				t.Errorf("transfer column %s = %q, want %q", col, got, v)
+			}
+		}
+	})
+
+}
+
+// consolidatedHeaderRow is the 1-based row of the Consolidated Data column headers.
+const consolidatedHeaderRow = 10
+
 func ingestReconFixtures(t *testing.T, pool *pgxpool.Pool) ingest.Result {
 	t.Helper()
 	res, err := ingest.Run(context.Background(), pool, ingest.Inputs{
@@ -166,4 +251,39 @@ func assertInts(t *testing.T, what string, got, want []int) {
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("%s = %v, want %v", what, got, want)
 	}
+}
+
+// sheetRows reads every row of a sheet as raw values.
+func sheetRows(t *testing.T, f *excelize.File, sheet string) [][]string {
+	t.Helper()
+	rows, err := f.GetRows(sheet, excelize.Options{RawCellValue: true})
+	if err != nil {
+		t.Fatalf("read sheet %s: %v", sheet, err)
+	}
+	return rows
+}
+
+// cellAt returns the value of a column letter in a row read by sheetRows.
+func cellAt(row []string, col string) string {
+	idx := 0
+	for _, c := range col {
+		idx = idx*26 + int(c-'A') + 1
+	}
+	idx--
+	if idx < len(row) {
+		return row[idx]
+	}
+	return ""
+}
+
+// findConsolidatedRow returns the Consolidated Data row whose record_ref column is ref.
+func findConsolidatedRow(t *testing.T, rows [][]string, ref string) []string {
+	t.Helper()
+	for _, r := range rows {
+		if cellAt(r, "DE") == ref {
+			return r
+		}
+	}
+	t.Fatalf("Consolidated Data has no row for record_ref %q", ref)
+	return nil
 }
