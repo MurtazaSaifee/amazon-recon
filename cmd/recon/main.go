@@ -1,9 +1,13 @@
 // Command recon ingests the Amazon Payments and Settlement reports into PostgreSQL
 // and writes the reconciliation tie-out workbook.
 //
-//	recon migrate [--reset [--force-reset]]
-//	recon ingest  [--input-dir DIR] [--payments FILE] [--settlement FILE]
-//	recon report  [--out PATH]
+//	recon migrate     [--reset [--force-reset]]
+//	recon seed-config [--input-dir DIR] [--payments-config FILE] [--settlement-config FILE] [--summary-map FILE]
+//	recon ingest      [--input-dir DIR] [--payments FILE] [--settlement FILE] [--baseline]
+//	recon apply-fixes [--file PATH]
+//	recon report      [--out PATH]
+//	recon explain     --line "<group>/<line>"
+//	recon counts
 //
 // Every command reads the database from --db or $RECON_DATABASE_URL.
 package main
@@ -21,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
+	"amazonrecon/internal/explain"
 	"amazonrecon/internal/ingest"
 	"amazonrecon/internal/recon"
 	"amazonrecon/internal/report"
@@ -30,8 +35,10 @@ import (
 const usage = `usage:
   recon migrate     [--db URL] [--reset [--force-reset]]
   recon seed-config [--db URL] [--input-dir DIR] [--payments-config FILE] [--settlement-config FILE] [--summary-map FILE]
-  recon ingest      [--db URL] [--input-dir DIR] [--payments FILE] [--settlement FILE]
+  recon ingest      [--db URL] [--input-dir DIR] [--payments FILE] [--settlement FILE] [--baseline]
+  recon apply-fixes [--db URL] [--file PATH]
   recon report      [--db URL] [--out PATH]
+  recon explain     [--db URL] --line "<group>/<line>"
   recon counts      [--db URL]
 `
 
@@ -49,8 +56,12 @@ func main() {
 		err = cmdSeedConfig(ctx, os.Args[2:])
 	case "ingest":
 		err = cmdIngest(ctx, os.Args[2:])
+	case "apply-fixes":
+		err = cmdApplyFixes(ctx, os.Args[2:])
 	case "report":
 		err = cmdReport(ctx, os.Args[2:])
+	case "explain":
+		err = cmdExplain(ctx, os.Args[2:])
 	case "counts":
 		err = cmdCounts(ctx, os.Args[2:])
 	default:
@@ -157,6 +168,7 @@ func cmdIngest(ctx context.Context, args []string) error {
 	inputDir := fs.String("input-dir", "Assignment_050726_files", "directory holding the two reports")
 	payments := fs.String("payments", "amazon_payments_data.csv", "payments report file name")
 	settlement := fs.String("settlement", "amazon_settlements_data.txt", "settlement report file name")
+	baseline := fs.Bool("baseline", false, "run in baseline mode: every interpretation switch off")
 	fs.Parse(args)
 
 	pool, err := connect(ctx, *db)
@@ -165,9 +177,14 @@ func cmdIngest(ctx context.Context, args []string) error {
 	}
 	defer pool.Close()
 
+	mode := ingest.ModeFixed
+	if *baseline {
+		mode = ingest.ModeBaseline
+	}
 	res, err := ingest.Run(ctx, pool, ingest.Inputs{
 		PaymentsPath:   filepath.Join(*inputDir, *payments),
 		SettlementPath: filepath.Join(*inputDir, *settlement),
+		Mode:           mode,
 	})
 	if err != nil {
 		return fmt.Errorf("run %d: %w", res.RunID, err)
@@ -177,6 +194,62 @@ func cmdIngest(ctx context.Context, args []string) error {
 	fmt.Printf("  settlement lines stored: %d (header included)\n", res.SettlementLines)
 	fmt.Printf("  malformed lines:         %d (stored in ingest_errors)\n", res.Malformed)
 	fmt.Printf("  mode %s, config hash %.12s\n", res.Mode, res.ConfigHash)
+	return nil
+}
+
+// cmdApplyFixes runs a mapping-fix file against the database in one transaction.
+func cmdApplyFixes(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("apply-fixes", flag.ExitOnError)
+	db := dbFlag(fs)
+	file := fs.String("file", "MAPPING_FIXES.sql", "mapping-fix SQL file")
+	fs.Parse(args)
+
+	sql, err := os.ReadFile(*file)
+	if err != nil {
+		return err
+	}
+	pool, err := connect(ctx, *db)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	if err := store.ApplyFixes(ctx, pool, string(sql)); err != nil {
+		return err
+	}
+	fmt.Printf("applied %s in one transaction\n", *file)
+	return nil
+}
+
+// cmdExplain traces one Summary line's Variance in the latest complete run.
+func cmdExplain(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("explain", flag.ExitOnError)
+	db := dbFlag(fs)
+	lineArg := fs.String("line", "", `Summary line as "<group>/<line>", for example "Expenses/Amazon fees"`)
+	fs.Parse(args)
+	if *lineArg == "" {
+		return errors.New(`explain needs --line "<group>/<line>"`)
+	}
+	line, err := explain.ParseLine(*lineArg)
+	if err != nil {
+		return err
+	}
+
+	pool, err := connect(ctx, *db)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	runID, err := store.LatestCompleteRun(ctx, pool)
+	if err != nil {
+		return err
+	}
+	e, err := explain.Load(ctx, pool, runID, line)
+	if err != nil {
+		return err
+	}
+	fmt.Print(explain.Format(e))
 	return nil
 }
 
