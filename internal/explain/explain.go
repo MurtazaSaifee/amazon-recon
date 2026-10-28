@@ -15,6 +15,7 @@ import (
 
 	"amazonrecon/internal/report"
 	"amazonrecon/internal/source"
+	"amazonrecon/internal/store"
 )
 
 // TopRecords is how many record_refs an explanation lists, by absolute difference.
@@ -87,7 +88,7 @@ func Load(ctx context.Context, pool *pgxpool.Pool, runID int64, line Line) (Expl
 		return Explanation{}, fmt.Errorf("find Summary line: %w", err)
 	}
 
-	rows, err := pool.Query(ctx, `SELECT source, rule_id, rule_label, amount_field, line_count, amount::text
+	rows, err := pool.Query(ctx, `SELECT source, rule_id, rule_label, amount_field, line_count, amount
 		FROM v_line_variance WHERE run_id = $1 AND summary_group = $2 AND summary_line = $3
 		ORDER BY source, rule_id`, runID, line.Group, line.Name)
 	if err != nil {
@@ -98,13 +99,11 @@ func Load(ctx context.Context, pool *pgxpool.Pool, runID int64, line Line) (Expl
 	for rows.Next() {
 		var side string
 		var r RuleAmount
-		var amount string
+		var amount store.Amount
 		if err := rows.Scan(&side, &r.RuleID, &r.Label, &r.AmountField, &r.Lines, &amount); err != nil {
 			return Explanation{}, err
 		}
-		if r.Amount, err = decimal.NewFromString(amount); err != nil {
-			return Explanation{}, err
-		}
+		r.Amount = amount.Decimal
 		if side == source.Payments {
 			e.PaymentRules = append(e.PaymentRules, r)
 			payments = payments.Add(r.Amount)
@@ -127,7 +126,7 @@ func Load(ctx context.Context, pool *pgxpool.Pool, runID int64, line Line) (Expl
 
 // loadRecords reads the record_refs with a difference on the line, largest first, and the source lines behind each.
 func loadRecords(ctx context.Context, pool *pgxpool.Pool, e *Explanation) error {
-	rows, err := pool.Query(ctx, `SELECT record_ref, payments::text, settlements::text, difference::text
+	rows, err := pool.Query(ctx, `SELECT record_ref, payments, settlements, difference
 		FROM v_record_variance
 		WHERE run_id = $1 AND summary_group = $2 AND summary_line = $3 AND difference <> 0
 		ORDER BY abs(difference) DESC, record_ref
@@ -137,20 +136,12 @@ func loadRecords(ctx context.Context, pool *pgxpool.Pool, e *Explanation) error 
 	}
 	for rows.Next() {
 		var rec RecordVariance
-		var p, s, d string
+		var p, s, d store.Amount
 		if err := rows.Scan(&rec.RecordRef, &p, &s, &d); err != nil {
 			rows.Close()
-			return err
+			return fmt.Errorf("scan record variance: %w", err)
 		}
-		for _, v := range []struct {
-			text string
-			dst  *decimal.Decimal
-		}{{p, &rec.Payments}, {s, &rec.Settlements}, {d, &rec.Difference}} {
-			if *v.dst, err = decimal.NewFromString(v.text); err != nil {
-				rows.Close()
-				return err
-			}
-		}
+		rec.Payments, rec.Settlements, rec.Difference = p.Decimal, s.Decimal, d.Decimal
 		e.Records = append(e.Records, rec)
 	}
 	rows.Close()

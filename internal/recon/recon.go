@@ -108,8 +108,8 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 			runID, shortHash(rep.ConfigHash), shortHash(current))
 	}
 
-	var totalText string
-	if err := pool.QueryRow(ctx, `SELECT settlement_id, amount::text, currency, period_start, period_end,
+	var totalText store.Amount
+	if err := pool.QueryRow(ctx, `SELECT settlement_id, amount, currency, period_start, period_end,
 			deposit_date, file_name, line_number
 		FROM source_rows WHERE run_id = $1 AND line_kind = 'settlement_header'`, runID).Scan(
 		&rep.Settlement.ID, &totalText, &rep.Settlement.Currency, &rep.Settlement.PeriodStart,
@@ -117,10 +117,7 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 	); err != nil {
 		return Report{}, fmt.Errorf("settlement header of run %d: %w", runID, err)
 	}
-	total, err := decimal.NewFromString(totalText)
-	if err != nil {
-		return Report{}, err
-	}
+	total := totalText.Decimal
 	rep.Settlement.Total = total
 
 	rows, err := pool.Query(ctx, `SELECT source, file_name, sha256, physical_lines, stored_lines, malformed_lines
@@ -143,7 +140,7 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 	}
 
 	var comp, pay, def Total
-	var compAmt, payAmt, defAmt string
+	var compAmt, payAmt, defAmt store.Amount
 	if err := pool.QueryRow(ctx, `SELECT
 			count(*) FILTER (WHERE source = '`+source.Settlement+`' AND line_kind = '`+source.KindComponent+`' AND in_scope),
 			COALESCE(sum(amount) FILTER (WHERE source = '`+source.Settlement+`' AND line_kind = '`+source.KindComponent+`' AND in_scope), 0),
@@ -156,14 +153,7 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 	); err != nil {
 		return Report{}, fmt.Errorf("totals of run %d: %w", runID, err)
 	}
-	for _, p := range []struct {
-		t *Total
-		s string
-	}{{&comp, compAmt}, {&pay, payAmt}, {&def, defAmt}} {
-		if p.t.Amount, err = decimal.NewFromString(p.s); err != nil {
-			return Report{}, err
-		}
-	}
+	comp.Amount, pay.Amount, def.Amount = compAmt.Decimal, payAmt.Decimal, defAmt.Decimal
 
 	rep.Components = comp
 	rep.TransactionsInScope = pay
