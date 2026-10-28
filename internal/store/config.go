@@ -2,7 +2,6 @@ package store
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/csv"
 	"errors"
@@ -16,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"amazonrecon/internal/mapping"
+	"amazonrecon/internal/textfile"
 )
 
 // ConfigFiles names the three CSVs that seed the mapping tables.
@@ -167,11 +167,7 @@ func readConfigCSV(path string, header []string) ([]csvRecord, error) {
 	defer f.Close()
 
 	br := bufio.NewReader(f)
-	if b, err := br.Peek(3); err == nil && bytes.Equal(b, []byte{0xEF, 0xBB, 0xBF}) {
-		if _, err := br.Discard(3); err != nil {
-			return nil, err
-		}
-	} else if err != nil && !errors.Is(err, io.EOF) {
+	if err := textfile.SkipBOM(br); err != nil {
 		return nil, err
 	}
 

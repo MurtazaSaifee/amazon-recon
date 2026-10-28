@@ -40,6 +40,10 @@ type Line struct {
 	LineNumber int
 	Raw        map[string]string // header name to raw cell, exactly as provided
 
+	// Amounts holds a Transaction line's typed amount columns, parsed once, keyed by the column's header
+	// (PaymentsAmountColumns). Nil for every other line.
+	Amounts map[string]decimal.Decimal
+
 	SettlementID    string
 	TxnType         string
 	AmountType      string // components only
@@ -82,39 +86,32 @@ var (
 	gmt9Zone      = time.FixedZone("GMT+9", 9*60*60)
 )
 
-// parseGroupedAmount reads a payments amount, which may carry thousands separators
-// (for example "-133,756.51"). The result is exact: there are no floats.
-func parseGroupedAmount(s string) (decimal.Decimal, error) {
-	if !groupedAmount.MatchString(s) {
+// parseAmount is the one amount parser. It accepts the amount shape given by re, drops thousands
+// separators, and returns the exact decimal. It rejects more than two decimal places, which the
+// NUMERIC(14,2) column would round, so no value is ever rounded silently.
+func parseAmount(s string, re *regexp.Regexp) (decimal.Decimal, error) {
+	if !re.MatchString(s) {
 		return decimal.Zero, fmt.Errorf("amount %q is not a number", s)
 	}
-	return decimal.NewFromString(strings.ReplaceAll(s, ",", ""))
-}
-
-// parsePlainAmount reads a settlement amount, which has no separators.
-func parsePlainAmount(s string) (decimal.Decimal, error) {
-	if !plainAmount.MatchString(s) {
-		return decimal.Zero, fmt.Errorf("amount %q is not a number", s)
+	d, err := decimal.NewFromString(strings.ReplaceAll(s, ",", ""))
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("amount %q: %w", s, err)
 	}
-	return decimal.NewFromString(s)
-}
-
-// checkTwoDecimals rejects amounts that the NUMERIC(14,2) column would round.
-func checkTwoDecimals(d decimal.Decimal, s string) (decimal.Decimal, error) {
 	if d.Exponent() < -2 {
 		return decimal.Zero, fmt.Errorf("amount %q has more than 2 decimal places", s)
 	}
 	return d, nil
 }
 
-// ParseAmount reads a Payments amount cell, with or without thousands separators
-// (for example "-133,756.51" or "25.00"). It is exact and rejects more than two decimals.
-func ParseAmount(s string) (decimal.Decimal, error) {
-	d, err := parseGroupedAmount(s)
-	if err != nil {
-		return decimal.Zero, err
-	}
-	return checkTwoDecimals(d, s)
+// parsePaymentsAmount reads a Payments amount cell, which may carry thousands separators
+// (for example "-133,756.51" or "25.00").
+func parsePaymentsAmount(s string) (decimal.Decimal, error) {
+	return parseAmount(s, groupedAmount)
+}
+
+// parseSettlementAmount reads a Settlement amount cell, which has no separators.
+func parseSettlementAmount(s string) (decimal.Decimal, error) {
+	return parseAmount(s, plainAmount)
 }
 
 // parseGMT9Date reads a payments timestamp such as "3 July 2026 8:30:00 am GMT+9"
