@@ -69,6 +69,12 @@ func WriteWorkbook(path string, r recon.Report) error {
 	if err := writeAuditTrail(f, r.Audit, bold, money); err != nil {
 		return err
 	}
+	if err := writeConsolidated(f, r, bold, money); err != nil {
+		return err
+	}
+	if err := writeOutOfScope(f, r, bold, money); err != nil {
+		return err
+	}
 	// Excel recalculates the formulas when it opens the file; the stored values serve every other reader.
 	fullCalc := true
 	if err := f.SetCalcProps(&excelize.CalcPropsOptions{FullCalcOnLoad: &fullCalc}); err != nil {

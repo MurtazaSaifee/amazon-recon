@@ -59,9 +59,10 @@ type Report struct {
 	ComponentsMinusTotal        decimal.Decimal // should be zero
 	ExcludingTransferMinusTotal decimal.Decimal // should be zero
 
-	Summary Summary
-	TieOut  TieOut
-	Audit   []AuditRow // one row per Contribution, in source and line order
+	Summary        Summary
+	TieOut         TieOut
+	Reconciliation Reconciliation
+	Audit          []AuditRow // one row per Contribution, in source and line order
 }
 
 // Build reads the report data for one completed run.
@@ -153,6 +154,9 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 	rep.ExcludingTransferMinusTotal = rep.ReleasedExcludingTransfer.Amount.Sub(total)
 
 	if err := buildSummary(ctx, pool, runID, &rep); err != nil {
+		return Report{}, err
+	}
+	if err := buildReconciliation(ctx, pool, runID, &rep); err != nil {
 		return Report{}, err
 	}
 	if err := readAuditTrail(ctx, pool, runID, &rep); err != nil {

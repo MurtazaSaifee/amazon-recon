@@ -88,3 +88,31 @@ Run 1 on the real files, seeded from `amazon_payment_configs_au_old.csv` (149 ru
 - Deferred memo (out of scope): 43,540.07 over 2,398 lines.
 - Subtotals: Sales payments 371,268.75 / settlements 357,801.39; Refunds -1,772.50 / -1,815.09; Expenses -277,623.86 / -143,867.35; Paid To Amazon 0.00 / 0.00.
 - Running totals equal the SQL recomputation from the Contributions (the report did not fail).
+
+## 2026-10-28: Ticket 04, reconciliation by record_ref (Baseline, run 1 on the real files)
+
+Each source is grouped by record_ref over its in-scope mapped lines. The payments line `total` is compared with the sum of Component amounts. Counts are record_refs, except Unmapped, which counts lines.
+
+- Reconciled: 13,289
+- Reconciled with difference: 0
+- Unreconciled payment: 26
+- Unreconciled settlement: 0
+- Unmapped: 0 lines
+
+Checks:
+- An independent SQL query (sum of payments per record_ref against sum of Components per record_ref, outside the view) finds the same 13,289 records with both sides, and none of them differ.
+- The Transfer line is an Unreconciled payment, record_ref `|90000000001|2026-07-18`, -133,756.51.
+- Of the 26 Unreconciled payments, 25 are Order lines whose `total` is 0.00 and which have no Component. The Transfer is the only one with an amount. Amazon's Settlement report carries no Component for a zero amount, so these 25 fall out as Unreconciled payment under the definition. Left as it is: this is a classification question, not a config defect, and it is recorded here for the reviewer.
+- Largest Reconciled-with-difference record_refs by absolute difference: none. No record_ref has a non-zero difference, so there is no top five to list.
+- Tie-out figures are unchanged from ticket 01: Components 212,118.95 (difference 0.00), Released excluding Transfer 212,118.95 (difference 0.00), Deferred memo 43,540.07 over 2,398 lines.
+
+Decisions made in this ticket:
+- Consolidated Data follows the sample's columns, with `record_ref` and the payments and settlement source line numbers added at the right. Every unmapped line gets its own row, because it has no record_ref.
+- A side's descriptive cells come from its earliest line (lowest line number). The settlement period, deposit date, currency and total-amount fields are blank on Component rows, so they stay blank.
+- Per-Summary-line cells are blank for a Summary line with no field. Otherwise a side with lines shows its Contributions, with 0.00 where nothing routed.
+- A routed Summary field with no Summary line (for example `sales_gift_wrap_credits`, or `bank_account_transfer_round_off` on the synthetic fixture) gets its own column on each side, after the Summary lines, and its own difference column. No Contribution leaves the Consolidated sheet.
+
+Gaps, not closed in this ticket:
+- The total difference is line-based, so the per-line differences do not add up to it wherever a routing gap exists.
+- Consolidated values are stored numbers, not formulas.
+- `WriteSource` deletes a report's rows across all runs, so only the latest run's lines are held. The run-level audit belongs to ticket 05.
