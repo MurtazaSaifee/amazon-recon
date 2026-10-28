@@ -89,9 +89,9 @@ func ReadPayments(r io.Reader) (PaymentsReport, error) {
 			out.Errors = append(out.Errors, ParseError{Source: Payments, LineNumber: lineNo, Raw: text, Reason: "blank line"})
 			continue
 		}
-		line, err := parsePaymentsLine(lineNo, text, header)
-		if err != nil {
-			out.Errors = append(out.Errors, ParseError{Source: Payments, LineNumber: lineNo, Raw: text, Reason: err.Error()})
+		line, perr := parsePaymentsLine(lineNo, text, header)
+		if perr != nil {
+			out.Errors = append(out.Errors, *perr)
 			continue
 		}
 		out.Lines = append(out.Lines, line)
@@ -99,31 +99,41 @@ func ReadPayments(r io.Reader) (PaymentsReport, error) {
 	return out, nil
 }
 
-func parsePaymentsLine(lineNo int, text string, header []string) (Line, error) {
+// parsePaymentsLine reads one Transaction line. On failure it returns a ParseError that
+// carries the settlement ID and status cells, when they were readable. A line whose column
+// count is wrong has no reliable cell positions, so it carries neither.
+func parsePaymentsLine(lineNo int, text string, header []string) (Line, *ParseError) {
+	var settlementID, status string
+	fail := func(reason string) (Line, *ParseError) {
+		return Line{}, &ParseError{Source: Payments, LineNumber: lineNo, Raw: text, Reason: reason,
+			SettlementID: settlementID, Status: status}
+	}
+
 	rec, err := parseCSVRecord(text)
 	if err != nil {
-		return Line{}, err
+		return fail(err.Error())
 	}
 	if len(rec) != len(header) {
-		return Line{}, fmt.Errorf("expected %d columns, found %d", len(header), len(rec))
+		return fail(fmt.Sprintf("expected %d columns, found %d", len(header), len(rec)))
 	}
 	raw := make(map[string]string, len(header))
 	for i, h := range header {
 		raw[h] = rec[i]
 	}
-	if raw["settlement ID"] == "" {
-		return Line{}, errors.New("settlement ID is empty")
+	settlementID, status = raw["settlement ID"], raw["Transaction status"]
+	if settlementID == "" {
+		return fail("settlement ID is empty")
 	}
-	if raw["Transaction status"] == "" {
-		return Line{}, errors.New("Transaction status is empty")
+	if status == "" {
+		return fail("Transaction status is empty")
 	}
 	amount, err := ParseAmount(raw["total"])
 	if err != nil {
-		return Line{}, fmt.Errorf("total: %w", err)
+		return fail(fmt.Sprintf("total: %v", err))
 	}
 	for _, col := range PaymentsAmountColumns {
 		if _, err := ParseAmount(raw[col]); err != nil {
-			return Line{}, fmt.Errorf("%s: %w", col, err)
+			return fail(fmt.Sprintf("%s: %v", col, err))
 		}
 	}
 
@@ -135,7 +145,7 @@ func parsePaymentsLine(lineNo int, text string, header []string) (Line, error) {
 	}
 	posted, err := parseGMT9Date(when)
 	if err != nil {
-		return Line{}, err
+		return fail(err.Error())
 	}
 
 	return Line{

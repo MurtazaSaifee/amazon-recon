@@ -117,17 +117,6 @@ func FinishRun(ctx context.Context, pool *pgxpool.Pool, runID int64, status, err
 	return err
 }
 
-// RecordErrors stores the malformed lines of a run.
-func RecordErrors(ctx context.Context, pool *pgxpool.Pool, runID int64, errs []source.ParseError) error {
-	rows := make([][]any, 0, len(errs))
-	for _, e := range errs {
-		rows = append(rows, []any{runID, e.Source, e.LineNumber, e.Raw, e.Reason})
-	}
-	_, err := pool.CopyFrom(ctx, pgx.Identifier{"ingest_errors"},
-		[]string{"run_id", "source", "line_number", "raw_text", "reason"}, pgx.CopyFromRows(rows))
-	return err
-}
-
 // RecordFile stores a file's ingest record inside the run's transaction.
 func RecordFile(ctx context.Context, tx pgx.Tx, runID int64, f FileRecord) error {
 	var preamble []byte

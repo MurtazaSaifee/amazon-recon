@@ -29,9 +29,13 @@ func writeSummary(f *excelize.File, r recon.Report, bold, money int) error {
 	w.text(4, "C", r.Settlement.PeriodStart.Format("2006-01-02")+" to "+r.Settlement.PeriodEnd.Format("2006-01-02"), 0)
 	w.text(5, "B", "Run ID", 0)
 	w.text(5, "C", fmt.Sprint(r.RunID), 0)
-	w.text(6, "B", summaryNote, 0)
+	for i, field := range runFields(r) {
+		w.text(6+i, "B", field.label, 0)
+		w.text(6+i, "C", field.value, 0)
+	}
+	w.text(9, "B", summaryNote, 0)
 
-	const header = 8
+	const header = 11
 	w.text(header, "B", "Summary", bold)
 	w.text(header, "C", "Payments", bold)
 	w.text(header, "D", "Settlements", bold)

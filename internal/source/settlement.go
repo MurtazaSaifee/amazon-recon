@@ -75,7 +75,8 @@ func ReadSettlement(r io.Reader) (SettlementReport, error) {
 		if raw["total-amount"] != "" {
 			line, err := parseSettlementHeader(lineNo, raw)
 			if err != nil {
-				out.Errors = append(out.Errors, ParseError{Source: Settlement, LineNumber: lineNo, Raw: text, Reason: err.Error()})
+				out.Errors = append(out.Errors, ParseError{Source: Settlement, LineNumber: lineNo, Raw: text, Reason: err.Error(),
+					SettlementID: raw["settlement-id"]})
 				continue
 			}
 			headers = append(headers, line)
@@ -83,7 +84,8 @@ func ReadSettlement(r io.Reader) (SettlementReport, error) {
 		}
 		line, err := parseSettlementComponent(lineNo, raw)
 		if err != nil {
-			out.Errors = append(out.Errors, ParseError{Source: Settlement, LineNumber: lineNo, Raw: text, Reason: err.Error()})
+			out.Errors = append(out.Errors, ParseError{Source: Settlement, LineNumber: lineNo, Raw: text, Reason: err.Error(),
+				SettlementID: raw["settlement-id"]})
 			continue
 		}
 		out.Components = append(out.Components, line)

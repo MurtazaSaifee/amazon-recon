@@ -172,6 +172,8 @@ func cmdIngest(ctx context.Context, args []string) error {
 	fmt.Printf("run %d complete: settlement %s\n", res.RunID, res.SettlementID)
 	fmt.Printf("  payments lines stored:   %d\n", res.PaymentsLines)
 	fmt.Printf("  settlement lines stored: %d (header included)\n", res.SettlementLines)
+	fmt.Printf("  malformed lines:         %d (stored in ingest_errors)\n", res.Malformed)
+	fmt.Printf("  mode %s, config hash %.12s\n", res.Mode, res.ConfigHash)
 	return nil
 }
 
