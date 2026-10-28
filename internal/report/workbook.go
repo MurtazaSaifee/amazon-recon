@@ -81,8 +81,6 @@ func WriteWorkbook(path string, r recon.Report) error {
 	return numericFormulaCache(path)
 }
 
-const stamp = "2006-01-02 15:04:05 MST"
-
 // sheetWriter writes cells and keeps the first error.
 type sheetWriter struct {
 	f     *excelize.File

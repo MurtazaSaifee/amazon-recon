@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
+
+	"amazonrecon/internal/timefmt"
 )
 
 // Status is the reconciliation outcome of one record_ref.
@@ -158,7 +160,7 @@ func readSides(ctx context.Context, pool *pgxpool.Pool, runID int64) (map[sideKe
 			return nil, fmt.Errorf("raw payload of %s record %s: %w", src, ref, err)
 		}
 		if posted != nil {
-			s.PostedDate = posted.Format("2006-01-02")
+			s.PostedDate = timefmt.Date(*posted)
 		}
 	}
 	return sides, rows.Err()
@@ -286,7 +288,7 @@ func scanListed(rows pgx.Rows) ([]ListedLine, error) {
 		}
 		l.Amount = d
 		if posted != nil {
-			l.PostedDate = posted.Format("2006-01-02")
+			l.PostedDate = timefmt.Date(*posted)
 		}
 		if err := json.Unmarshal(raw, &l.Raw); err != nil {
 			return nil, fmt.Errorf("raw payload of %s line %d: %w", l.Source, l.LineNumber, err)

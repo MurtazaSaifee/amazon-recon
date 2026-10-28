@@ -30,6 +30,7 @@ import (
 	"amazonrecon/internal/recon"
 	"amazonrecon/internal/report"
 	"amazonrecon/internal/store"
+	"amazonrecon/internal/timefmt"
 )
 
 const usage = `usage:
@@ -317,8 +318,8 @@ func printCounts(c recon.Counts) {
 
 func printTieOut(r recon.Report, out string) {
 	fmt.Printf("Run %d, Settlement %s (period %s to %s UTC, deposit %s UTC)\n", r.RunID, r.Settlement.ID,
-		r.Settlement.PeriodStart.Format("2006-01-02"), r.Settlement.PeriodEnd.Format("2006-01-02"),
-		r.Settlement.DepositDate.Format("2006-01-02"))
+		timefmt.Date(r.Settlement.PeriodStart), timefmt.Date(r.Settlement.PeriodEnd),
+		timefmt.Date(r.Settlement.DepositDate))
 	amount := func(label string, d decimal.Decimal) {
 		fmt.Printf("  %-56s %18s\n", label, report.FormatAmount(d))
 	}

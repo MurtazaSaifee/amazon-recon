@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/xuri/excelize/v2"
 
@@ -107,6 +109,35 @@ func TestBaselineAndFixedDifferOnlyWhereASwitchApplies(t *testing.T) {
 	}
 	if !base.Components.Amount.Equal(fixed.Components.Amount) || base.Reconciliation.Counts != fixed.Reconciliation.Counts {
 		t.Errorf("reconciliation of the settlement side differs between modes")
+	}
+}
+
+// Timestamps labelled UTC are written in UTC, whatever zone the value was read in. The times are
+// moved here into a zone 7 hours behind UTC, where the date of 1 July 00:00 UTC is still 30 June.
+func TestTimestampsLabelledUTCAreWrittenInUTC(t *testing.T) {
+	ctx := context.Background()
+	pool := newPipelineDB(t)
+	res := ingestFixtures(t, pool)
+	rep, err := recon.Build(ctx, pool, res.RunID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	behind := time.FixedZone("UTC-7", -7*60*60)
+	rep.Settlement.PeriodStart = rep.Settlement.PeriodStart.In(behind)
+	rep.Settlement.PeriodEnd = rep.Settlement.PeriodEnd.In(behind)
+	rep.Settlement.DepositDate = rep.Settlement.DepositDate.In(behind)
+	rep.StartedAt = rep.StartedAt.In(behind)
+	rep.FinishedAt = rep.FinishedAt.In(behind)
+
+	f := writeReport(t, rep)
+	checkValue(t, f, report.SummarySheet, "Settlement period (UTC)", "C", "2026-07-01 to 2026-07-15")
+	checkValue(t, f, report.SummarySheet, "Deposit date (UTC)", "C", "2026-07-17 00:00:00 UTC")
+	started, err := f.GetCellValue(report.SummarySheet, "C"+fmt.Sprint(findLabel(t, f, report.SummarySheet, "Run started / finished")), excelize.Options{RawCellValue: true})
+	if err != nil {
+		t.Fatalf("read run started: %v", err)
+	}
+	if strings.Count(started, " UTC") != 2 {
+		t.Errorf("run started / finished = %q, want both times in UTC", started)
 	}
 }
 

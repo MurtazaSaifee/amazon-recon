@@ -8,6 +8,7 @@ import (
 	"amazonrecon/internal/mapping"
 	"amazonrecon/internal/source"
 	"amazonrecon/internal/store"
+	"amazonrecon/internal/timefmt"
 )
 
 // mappedRow scopes a line and maps it. Every Transaction line and Component is mapped, in or
@@ -70,7 +71,7 @@ func keysOf(l source.Line) mapping.Keys {
 	return mapping.Keys{
 		TxnRef:          l.TxnRef,
 		SKU:             l.SKU,
-		Date:            l.PostedDate.Format("2006-01-02"),
+		Date:            timefmt.Date(l.PostedDate),
 		SettlementID:    l.SettlementID,
 		Description:     l.Description,
 		ShipmentID:      l.Raw["shipment-id"],

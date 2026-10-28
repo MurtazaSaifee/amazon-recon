@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"amazonrecon/internal/recon"
+	"amazonrecon/internal/timefmt"
 )
 
 // headerField is one labelled line of the run header.
@@ -19,10 +20,10 @@ type headerField struct {
 func writeRunHeader(w *sheetWriter, r recon.Report, row int) int {
 	fields := []headerField{
 		{"Settlement ID", r.Settlement.ID},
-		{"Settlement period (UTC)", r.Settlement.PeriodStart.Format("2006-01-02") + " to " + r.Settlement.PeriodEnd.Format("2006-01-02")},
-		{"Deposit date (UTC)", r.Settlement.DepositDate.Format(stamp)},
+		{"Settlement period (UTC)", timefmt.Date(r.Settlement.PeriodStart) + " to " + timefmt.Date(r.Settlement.PeriodEnd)},
+		{"Deposit date (UTC)", timefmt.Timestamp(r.Settlement.DepositDate)},
 		{"Run ID", fmt.Sprint(r.RunID)},
-		{"Run started / finished", r.StartedAt.Format(stamp) + " / " + r.FinishedAt.Format(stamp)},
+		{"Run started / finished", timefmt.Timestamp(r.StartedAt) + " / " + timefmt.Timestamp(r.FinishedAt)},
 		{"Config hash (first 12 characters)", shortHash(r.ConfigHash)},
 		{"Mode", r.Mode},
 		{"Interpretation switches", switchList(r.Switches)},
