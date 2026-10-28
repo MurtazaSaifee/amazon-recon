@@ -1,0 +1,17 @@
+# Local PostgreSQL for the reconciliation pipeline.
+# The host port is configurable so it never collides with another local Postgres:
+#   PG_PORT=55499 docker compose up -d
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: recon
+      POSTGRES_PASSWORD: recon
+      POSTGRES_DB: recon
+    ports:
+      - "${PG_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recon -d recon"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
