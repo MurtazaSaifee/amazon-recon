@@ -9,3 +9,4 @@ reports/
 # Downloads and OS noise
 *.zip
 .DS_Store
+.claude/
