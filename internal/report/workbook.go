@@ -125,7 +125,10 @@ func WriteWorkbook(path string, r recon.Report) error {
 	if w.err != nil {
 		return w.err
 	}
-	return f.SaveAs(path)
+	if err := f.SaveAs(path); err != nil {
+		return err
+	}
+	return numericFormulaCache(path)
 }
 
 const stamp = "2006-01-02 15:04:05 MST"
