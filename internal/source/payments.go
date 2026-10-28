@@ -22,6 +22,13 @@ var paymentsHeader = []string{
 	"Transaction Release Date",
 }
 
+// PaymentsAmountColumns are the typed amount columns of a Transaction line, other
+// than total. Each one is an Amount field a mapping rule can read.
+var PaymentsAmountColumns = []string{
+	"product sales", "shipping credits", "gift wrap credits", "promotional rebates", "sales tax collected",
+	"low value goods", "selling fees", "fulfilment by amazon fees", "other transaction fees", "other",
+}
+
 // PaymentsReport is the result of reading the payments report.
 type PaymentsReport struct {
 	Preamble []string     // the 9 lines before the header, kept as run metadata
@@ -110,12 +117,14 @@ func parsePaymentsLine(lineNo int, text string, header []string) (Line, error) {
 	if raw["Transaction status"] == "" {
 		return Line{}, errors.New("Transaction status is empty")
 	}
-	amount, err := parseGroupedAmount(raw["total"])
+	amount, err := ParseAmount(raw["total"])
 	if err != nil {
 		return Line{}, fmt.Errorf("total: %w", err)
 	}
-	if _, err := checkTwoDecimals(amount, raw["total"]); err != nil {
-		return Line{}, fmt.Errorf("total: %w", err)
+	for _, col := range PaymentsAmountColumns {
+		if _, err := ParseAmount(raw[col]); err != nil {
+			return Line{}, fmt.Errorf("%s: %w", col, err)
+		}
 	}
 
 	// Released lines carry a release date, which is the posted date. Deferred

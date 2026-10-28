@@ -1,0 +1,22 @@
+summary_field,summary_group,summary_line,display_order
+sales_product_charges,Sales,Product Charges,10
+sales_tax,Sales,Tax,20
+sales_shipping,Sales,Shipping,30
+sales_amazon_fees,Sales,Amazon fees,40
+sales_inventory_reimbursements,Sales,Inventory Reimbursements,50
+,Sales,Cross-account Debt Adjustment,60
+sales_other,Sales,Other,70
+,Sales,FBA Fees,80
+,Sales,Micro Deposit (Failed),90
+refunded_expenses,Refunds,Refund expenses,100
+refunded_sales,Refunds,Refunded sales,110
+expenses_promotional_rebates,Expenses,Promo rebates,120
+expenses_fba_fees,Expenses,FBA fees,130
+expenses_cost_of_advertising,Expenses,Cost of Advertising,140
+,Expenses,Shipping Charges,150
+expenses_amazon_fees,Expenses,Amazon fees,160
+expenses_reversed_reimbursements,Expenses,Reversed Reimbursements,170
+,Expenses,Cross-account Debt Adjustment,180
+expenses_other,Expenses,Other,190
+,Expenses,Micro Deposit,200
+paid_to_amazon,Paid To Amazon,Paid To Amazon,300
