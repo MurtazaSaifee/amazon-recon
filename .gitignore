@@ -1,0 +1,11 @@
+# Seller data: buyer city/state/postcode and order IDs. The repo is public,
+# so the inputs, full dumps and generated reports go with the submission
+# email instead.
+Assignment_050726_files/
+data/
+dump/
+reports/
+
+# Downloads and OS noise
+*.zip
+.DS_Store
