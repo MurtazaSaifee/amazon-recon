@@ -46,7 +46,10 @@ func WriteWorkbook(path string, r recon.Report) error {
 	}
 	f := excelize.NewFile()
 	defer f.Close()
-	if err := f.SetSheetName("Sheet1", TieOutSheet); err != nil {
+	if err := f.SetSheetName("Sheet1", SummarySheet); err != nil {
+		return err
+	}
+	if _, err := f.NewSheet(TieOutSheet); err != nil {
 		return err
 	}
 	bold, err := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
@@ -55,6 +58,14 @@ func WriteWorkbook(path string, r recon.Report) error {
 	}
 	money, err := f.NewStyle(&excelize.Style{NumFmt: 4}) // #,##0.00
 	if err != nil {
+		return err
+	}
+	if err := writeSummary(f, r, bold, money); err != nil {
+		return err
+	}
+	// Excel recalculates the formulas when it opens the file; the stored values serve every other reader.
+	fullCalc := true
+	if err := f.SetCalcProps(&excelize.CalcPropsOptions{FullCalcOnLoad: &fullCalc}); err != nil {
 		return err
 	}
 
@@ -124,6 +135,36 @@ func (w *sheetWriter) text(row int, col, value string, style int) {
 	}
 	if style != 0 {
 		w.err = w.f.SetCellStyle(w.sheet, w.cell(row, col), w.cell(row, col), style)
+	}
+}
+
+// number writes a stored decimal value as a number cell, keeping its exact text.
+func (w *sheetWriter) number(row int, col string, d decimal.Decimal, style int) {
+	if w.err != nil {
+		return
+	}
+	w.err = w.f.SetCellDefault(w.sheet, w.cell(row, col), d.StringFixed(2))
+	if w.err == nil && style != 0 {
+		w.err = w.f.SetCellStyle(w.sheet, w.cell(row, col), w.cell(row, col), style)
+	}
+}
+
+// formula writes a formula and keeps its stored value, the number the formula gives. Excel
+// recalculates the formula; previewers and readers that do not recalculate still see the value.
+func (w *sheetWriter) formula(row int, col, formula string, value decimal.Decimal, style int) {
+	if w.err != nil {
+		return
+	}
+	// The value is set first: SetCellFormula keeps the stored value, while SetCellDefault would drop the formula.
+	cell := w.cell(row, col)
+	if w.err = w.f.SetCellDefault(w.sheet, cell, value.StringFixed(2)); w.err != nil {
+		return
+	}
+	if w.err = w.f.SetCellFormula(w.sheet, cell, formula); w.err != nil {
+		return
+	}
+	if style != 0 {
+		w.err = w.f.SetCellStyle(w.sheet, cell, cell, style)
 	}
 }
 

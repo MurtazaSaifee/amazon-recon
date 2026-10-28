@@ -44,10 +44,7 @@ const (
 
 func TestPipelineTracerBullet(t *testing.T) {
 	ctx := context.Background()
-	pool := freshDatabase(t)
-	if err := store.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	pool := newPipelineDB(t)
 	res := ingestFixtures(t, pool)
 	rep, err := recon.Build(ctx, pool, res.RunID)
 	if err != nil {
@@ -197,10 +194,7 @@ func TestPipelineTracerBullet(t *testing.T) {
 // previous complete run still stands.
 func TestMalformedLineFailsRunAndReplacesNothing(t *testing.T) {
 	ctx := context.Background()
-	pool := freshDatabase(t)
-	if err := store.Migrate(ctx, pool); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	pool := newPipelineDB(t)
 	good := ingestFixtures(t, pool)
 	before, err := recon.Build(ctx, pool, good.RunID)
 	if err != nil {

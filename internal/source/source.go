@@ -102,6 +102,16 @@ func checkTwoDecimals(d decimal.Decimal, s string) (decimal.Decimal, error) {
 	return d, nil
 }
 
+// ParseAmount reads a Payments amount cell, with or without thousands separators
+// (for example "-133,756.51" or "25.00"). It is exact and rejects more than two decimals.
+func ParseAmount(s string) (decimal.Decimal, error) {
+	d, err := parseGroupedAmount(s)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	return checkTwoDecimals(d, s)
+}
+
 // parseGMT9Date reads a payments timestamp such as "3 July 2026 8:30:00 am GMT+9"
 // and returns the UTC date it falls on, as midnight UTC.
 func parseGMT9Date(s string) (time.Time, error) {

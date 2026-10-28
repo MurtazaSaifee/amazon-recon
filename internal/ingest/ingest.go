@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"amazonrecon/internal/mapping"
 	"amazonrecon/internal/source"
 	"amazonrecon/internal/store"
 )
@@ -83,21 +84,37 @@ func run(ctx context.Context, pool *pgxpool.Pool, runID int64, in Inputs) (Resul
 	}
 
 	headerID := settle.Header.SettlementID
-	settlementRows := make([]store.SourceRow, 0, 1+len(settle.Components))
-	settlementRows = append(settlementRows, scopedRow(setDigest.name, settle.Header, headerID))
-	for _, l := range settle.Components {
-		settlementRows = append(settlementRows, scopedRow(setDigest.name, l, headerID))
-	}
-	paymentRows := make([]store.SourceRow, 0, len(pay.Lines))
-	for _, l := range pay.Lines {
-		paymentRows = append(paymentRows, scopedRow(payDigest.name, l, headerID))
-	}
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return Result{}, err
 	}
 	defer tx.Rollback(ctx)
+
+	// The rules are read inside the transaction, so every line is mapped with the configs the run stored.
+	payRules, setRules, err := store.LoadRules(ctx, tx)
+	if err != nil {
+		return Result{}, err
+	}
+	mapper := mapping.NewMapper(payRules, setRules, nil)
+
+	settlementRows := make([]store.SourceRow, 0, 1+len(settle.Components))
+	settlementRows = append(settlementRows, scopedRow(setDigest.name, settle.Header, headerID))
+	for _, l := range settle.Components {
+		row, err := mappedRow(mapper, setDigest.name, l, headerID)
+		if err != nil {
+			return Result{}, err
+		}
+		settlementRows = append(settlementRows, row)
+	}
+	paymentRows := make([]store.SourceRow, 0, len(pay.Lines))
+	for _, l := range pay.Lines {
+		row, err := mappedRow(mapper, payDigest.name, l, headerID)
+		if err != nil {
+			return Result{}, err
+		}
+		paymentRows = append(paymentRows, row)
+	}
 
 	if err := store.RecordFile(ctx, tx, runID, store.FileRecord{
 		Source: source.Payments, FileName: payDigest.name, SHA256: payDigest.sha,
@@ -111,10 +128,10 @@ func run(ctx context.Context, pool *pgxpool.Pool, runID int64, in Inputs) (Resul
 	}); err != nil {
 		return Result{}, fmt.Errorf("record settlement file: %w", err)
 	}
-	if err := store.ReplaceSourceLines(ctx, tx, runID, source.Settlement, settlementRows); err != nil {
+	if err := store.WriteSource(ctx, tx, runID, source.Settlement, settlementRows); err != nil {
 		return Result{}, fmt.Errorf("store settlement lines: %w", err)
 	}
-	if err := store.ReplaceSourceLines(ctx, tx, runID, source.Payments, paymentRows); err != nil {
+	if err := store.WriteSource(ctx, tx, runID, source.Payments, paymentRows); err != nil {
 		return Result{}, fmt.Errorf("store payments lines: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

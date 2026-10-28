@@ -69,3 +69,22 @@ Other settled points:
 - Scope: 13,472 Released, 2,398 Deferred and 7,156 other-Settlement payments lines, which total 23,026. Settlement: 54,979 components in scope plus the header.
 - Re-ingesting the same files keeps the stored rows at 78,006 (23,026 payments plus 54,980 settlement), so nothing is double-counted.
 - Synthetic fixtures copy the real shapes: BOM, 9-line preamble, quoted thousands, release times either side of midnight UTC and exactly at midnight, Deferred lines, another Settlement, the header line and a Transfer line.
+
+## 2026-10-28: Ticket 03, config-driven Summary during ingestion (Baseline, no switches)
+
+Run 1 on the real files, seeded from `amazon_payment_configs_au_old.csv` (149 rules, P-002 to P-150), `amazon_settlement_configs_au.csv` (137 rules) and `configs/summary_line_map.csv` (21 Summary lines). No interpretation switches exist yet, so this is the Baseline. Variance is Payments minus Settlements.
+
+- Expenses › Amazon fees: variance -133,756.51 (Payments -266,349.92, Settlements -132,593.41). This is the Transfer line, which is in scope and falls to the catch-all rule.
+- Other non-zero Summary lines (Payments, Settlements, variance):
+  - Sales › Product Charges: 348,815.93, 348,908.77, -92.84
+  - Sales › Shipping: 21,773.13, 8,200.96, 13,572.17
+  - Sales › Other: 0.00, 11.97, -11.97
+  - Refunds › Refund expenses: 258.87, 216.28, 42.59
+  - Expenses › Promo rebates: 0.00, -11,273.53, 11,273.53
+  - Expenses › Other: -11,273.53, 0.00, -11,273.53
+- Unmapped Summary field `sales_gift_wrap_credits`: payments 11.61, settlements 0.00.
+- Tie-out, Payments: Summary net 91,884.00; routing gaps -13,521.56 (group P-004,P-009 to P-019: -42.59; group P-005,P-006,P-064 to P-074: -13,478.97); in-scope total 78,362.44; remaining difference to the Settlement total 212,118.95 is -133,756.51, the Transfer.
+- Tie-out, Settlements: Summary net 212,118.95; routing gaps 0.00; in-scope total 212,118.95; remaining difference 0.00.
+- Deferred memo (out of scope): 43,540.07 over 2,398 lines.
+- Subtotals: Sales payments 371,268.75 / settlements 357,801.39; Refunds -1,772.50 / -1,815.09; Expenses -277,623.86 / -143,867.35; Paid To Amazon 0.00 / 0.00.
+- Running totals equal the SQL recomputation from the Contributions (the report did not fail).

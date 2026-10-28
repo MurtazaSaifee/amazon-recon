@@ -1,0 +1,3 @@
+transaction_type,amount_type,amount_description,record_ref,to_summary_field_when_positive_amount,to_summary_field_when_negative_amount
+Order,ItemPrice,Principal,txn_ref+sku+date,sales_product_charges,sales_product_charges
+Order,ItemPrice,Tax,txn_ref+sku+date,sales_tax,sales_tax
