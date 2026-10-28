@@ -7,7 +7,7 @@ func sampleKeys() Keys {
 		TxnRef:          "111-2233445-6677889",
 		SKU:             "SKU-A",
 		Date:            "2026-07-17",
-		SettlementID:    "90000000001",
+		SettlementID:    "12000000001",
 		Description:     "Service fee",
 		ShipmentID:      "SHP-9",
 		MerchantOrderID: "MO-7",
@@ -32,7 +32,7 @@ func TestResolveTemplate(t *testing.T) {
 			name:     "every known field name resolves",
 			template: "settlement_id+description+shipment_id+merchant_order_id",
 			keys:     sampleKeys(),
-			want:     "90000000001|Service fee|SHP-9|MO-7",
+			want:     "12000000001|Service fee|SHP-9|MO-7",
 		},
 		{
 			name:     "empty field keeps an empty part",
@@ -44,7 +44,7 @@ func TestResolveTemplate(t *testing.T) {
 			name:     "literal text keeps its exact spelling and spaces",
 			template: "GENERAL ADJUSTMENT+sku+settlement_id+date",
 			keys:     sampleKeys(),
-			want:     "GENERAL ADJUSTMENT|SKU-A|90000000001|2026-07-17",
+			want:     "GENERAL ADJUSTMENT|SKU-A|12000000001|2026-07-17",
 		},
 		{
 			name:     "literal with colon, hyphen and upper case is kept as is",
@@ -56,7 +56,7 @@ func TestResolveTemplate(t *testing.T) {
 			name:         "unknown field-looking token is literal and warns",
 			template:     "ADJUSTMENT_OTHER+settlement_id+date+record_type+settlement_id",
 			keys:         sampleKeys(),
-			want:         "ADJUSTMENT_OTHER|90000000001|2026-07-17|record_type|90000000001",
+			want:         "ADJUSTMENT_OTHER|12000000001|2026-07-17|record_type|12000000001",
 			wantWarnings: []WarningKind{WarnUnknownToken},
 		},
 		{
