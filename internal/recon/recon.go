@@ -9,7 +9,17 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
+
+	"amazonrecon/internal/store"
 )
+
+// shortHash is the first 12 characters of a config hash, enough to name it in a message.
+func shortHash(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
+}
 
 // Total is a count of lines and the sum of their amounts.
 type Total struct {
@@ -84,6 +94,17 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 	if err := pool.QueryRow(ctx, "SELECT COALESCE(config_hash, ''), mode, switches FROM ingest_runs WHERE run_id = $1",
 		runID).Scan(&rep.ConfigHash, &rep.Mode, &rep.Switches); err != nil {
 		return Report{}, fmt.Errorf("config of run %d: %w", runID, err)
+	}
+	// A report must describe the config its run used. If the mapping configs changed after the run,
+	// the numbers would describe a config that no run produced, so the report refuses.
+	current, err := store.ConfigHash(ctx, pool)
+	if err != nil {
+		return Report{}, fmt.Errorf("current config hash: %w", err)
+	}
+	if current != rep.ConfigHash {
+		return Report{}, fmt.Errorf("run %d was ingested with config hash %s, but the mapping configs now hash to %s: "+
+			"the configs changed after the run; re-run ingest before reporting",
+			runID, shortHash(rep.ConfigHash), shortHash(current))
 	}
 
 	var totalText string
