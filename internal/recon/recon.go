@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
+	"amazonrecon/internal/source"
 	"amazonrecon/internal/store"
 )
 
@@ -144,12 +145,12 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 	var comp, pay, def Total
 	var compAmt, payAmt, defAmt string
 	if err := pool.QueryRow(ctx, `SELECT
-			count(*) FILTER (WHERE source = 'settlement' AND line_kind = 'component' AND in_scope),
-			COALESCE(sum(amount) FILTER (WHERE source = 'settlement' AND line_kind = 'component' AND in_scope), 0)::text,
-			count(*) FILTER (WHERE source = 'payments' AND in_scope),
-			COALESCE(sum(amount) FILTER (WHERE source = 'payments' AND in_scope), 0)::text,
-			count(*) FILTER (WHERE source = 'payments' AND scope_reason = 'Deferred'),
-			COALESCE(sum(amount) FILTER (WHERE source = 'payments' AND scope_reason = 'Deferred'), 0)::text
+			count(*) FILTER (WHERE source = '`+source.Settlement+`' AND line_kind = '`+source.KindComponent+`' AND in_scope),
+			COALESCE(sum(amount) FILTER (WHERE source = '`+source.Settlement+`' AND line_kind = '`+source.KindComponent+`' AND in_scope), 0),
+			count(*) FILTER (WHERE source = '`+source.Payments+`' AND in_scope),
+			COALESCE(sum(amount) FILTER (WHERE source = '`+source.Payments+`' AND in_scope), 0),
+			count(*) FILTER (WHERE source = '`+source.Payments+`' AND scope_reason = '`+source.ReasonDeferred+`'),
+			COALESCE(sum(amount) FILTER (WHERE source = '`+source.Payments+`' AND scope_reason = '`+source.ReasonDeferred+`'), 0)
 		FROM source_rows WHERE run_id = $1`, runID).Scan(
 		&comp.Count, &compAmt, &pay.Count, &payAmt, &def.Count, &defAmt,
 	); err != nil {

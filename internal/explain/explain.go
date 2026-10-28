@@ -14,6 +14,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"amazonrecon/internal/report"
+	"amazonrecon/internal/source"
 )
 
 // TopRecords is how many record_refs an explanation lists, by absolute difference.
@@ -95,16 +96,16 @@ func Load(ctx context.Context, pool *pgxpool.Pool, runID int64, line Line) (Expl
 	defer rows.Close()
 	payments, settlements := decimal.Zero, decimal.Zero
 	for rows.Next() {
-		var source string
+		var side string
 		var r RuleAmount
 		var amount string
-		if err := rows.Scan(&source, &r.RuleID, &r.Label, &r.AmountField, &r.Lines, &amount); err != nil {
+		if err := rows.Scan(&side, &r.RuleID, &r.Label, &r.AmountField, &r.Lines, &amount); err != nil {
 			return Explanation{}, err
 		}
 		if r.Amount, err = decimal.NewFromString(amount); err != nil {
 			return Explanation{}, err
 		}
-		if source == "payments" {
+		if side == source.Payments {
 			e.PaymentRules = append(e.PaymentRules, r)
 			payments = payments.Add(r.Amount)
 		} else {
@@ -162,8 +163,8 @@ func loadRecords(ctx context.Context, pool *pgxpool.Pool, e *Explanation) error 
 		if err != nil {
 			return err
 		}
-		e.Records[i].PaymentsLines = lines["payments"]
-		e.Records[i].SettlementLines = lines["settlement"]
+		e.Records[i].PaymentsLines = lines[source.Payments]
+		e.Records[i].SettlementLines = lines[source.Settlement]
 	}
 	return nil
 }
@@ -181,12 +182,12 @@ func sourceLines(ctx context.Context, pool *pgxpool.Pool, runID int64, field, re
 	defer rows.Close()
 	out := map[string][]SourceLine{}
 	for rows.Next() {
-		var source string
+		var side string
 		var l SourceLine
-		if err := rows.Scan(&source, &l.FileName, &l.LineNumber); err != nil {
+		if err := rows.Scan(&side, &l.FileName, &l.LineNumber); err != nil {
 			return nil, err
 		}
-		out[source] = append(out[source], l)
+		out[side] = append(out[side], l)
 	}
 	return out, rows.Err()
 }

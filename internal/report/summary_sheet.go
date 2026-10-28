@@ -58,7 +58,7 @@ func writeSummary(f *excelize.File, r recon.Report, bold, money int) error {
 
 	row = writeUnmapped(w, row, r.Summary.Unmapped, money, bold)
 	row = writeTieOut(w, row+1, r, money, bold)
-	writeStatusCounts(w, row+1, r.Reconciliation.Counts, bold)
+	writeStatusCounts(w, row+1, r.Reconciliation, bold)
 	return w.err
 }
 

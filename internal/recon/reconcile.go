@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
+	"amazonrecon/internal/source"
 	"amazonrecon/internal/timefmt"
 )
 
@@ -23,9 +24,14 @@ const (
 	UnreconciledSettlement   Status = "Unreconciled settlement"
 )
 
-// inScopeMapped selects the lines that reconcile: in-scope Transaction lines and Components that
-// a rule mapped. Unmapped lines have precedence_tier 0 and are listed separately.
-const inScopeMapped = "in_scope AND line_kind IN ('transaction', 'component') AND precedence_tier > 0"
+// Statuses lists the record_ref statuses in the order every sheet and the CLI show them.
+var Statuses = []Status{Reconciled, ReconciledWithDifference, UnreconciledPayment, UnreconciledSettlement}
+
+// Label is the status as the sheets and the CLI print it. It is the only place a status is named for
+// a reader, so the Summary, the Consolidated Data and the CLI cannot disagree on a word.
+func (s Status) Label() string {
+	return string(s)
+}
 
 // Side is one source's lines for one record_ref.
 type Side struct {
@@ -45,15 +51,8 @@ type RecordRow struct {
 	Difference  decimal.Decimal // payments total minus settlement total
 }
 
-// Counts holds the number of record_refs per status, and of unmapped lines per source.
-type Counts struct {
-	Reconciled               int
-	ReconciledWithDifference int
-	UnreconciledPayment      int
-	UnreconciledSettlement   int
-	UnmappedPayments         int // unmapped lines, not records: they have no record_ref
-	UnmappedSettlements      int
-}
+// Counts holds the number of record_refs per status. Every status is present, zero when it has none.
+type Counts map[Status]int
 
 // ListedLine is one line listed by itself: an unmapped line or an out-of-scope line.
 type ListedLine struct {
@@ -69,10 +68,21 @@ type ListedLine struct {
 // Reconciliation is the reconciliation of one run: its records in Consolidated order, the
 // unmapped lines and the out-of-scope lines.
 type Reconciliation struct {
-	Counts     Counts
-	Records    []RecordRow // Reconciled (with difference) first, then unreconciled payments, then settlements
-	Unmapped   []ListedLine
-	OutOfScope []ListedLine
+	Counts Counts
+	// UnmappedLines counts the unmapped lines per source. They are lines, not records: they have no record_ref.
+	UnmappedLines map[string]int
+	Records       []RecordRow // Reconciled (with difference) first, then unreconciled payments, then settlements
+	Unmapped      []ListedLine
+	OutOfScope    []ListedLine
+}
+
+// UnmappedTotal is the number of unmapped lines of both sources.
+func (r Reconciliation) UnmappedTotal() int {
+	n := 0
+	for _, c := range r.UnmappedLines {
+		n += c
+	}
+	return n
 }
 
 // buildReconciliation fills rep.Reconciliation for one run.
@@ -90,24 +100,17 @@ func buildReconciliation(ctx context.Context, pool *pgxpool.Pool, runID int64, r
 	if err := readListed(ctx, pool, runID, &rep.Reconciliation); err != nil {
 		return err
 	}
-	for _, rec := range rep.Reconciliation.Records {
-		switch rec.Status {
-		case Reconciled:
-			rep.Reconciliation.Counts.Reconciled++
-		case ReconciledWithDifference:
-			rep.Reconciliation.Counts.ReconciledWithDifference++
-		case UnreconciledPayment:
-			rep.Reconciliation.Counts.UnreconciledPayment++
-		case UnreconciledSettlement:
-			rep.Reconciliation.Counts.UnreconciledSettlement++
-		}
+	counts := Counts{}
+	for _, s := range Statuses {
+		counts[s] = 0
 	}
+	for _, rec := range rep.Reconciliation.Records {
+		counts[rec.Status]++
+	}
+	rep.Reconciliation.Counts = counts
+	rep.Reconciliation.UnmappedLines = map[string]int{source.Payments: 0, source.Settlement: 0}
 	for _, u := range rep.Reconciliation.Unmapped {
-		if u.Source == sourcePayments {
-			rep.Reconciliation.Counts.UnmappedPayments++
-		} else {
-			rep.Reconciliation.Counts.UnmappedSettlements++
-		}
+		rep.Reconciliation.UnmappedLines[u.Source]++
 	}
 	return nil
 }
@@ -119,7 +122,7 @@ type sideKey struct{ ref, source string }
 func readSides(ctx context.Context, pool *pgxpool.Pool, runID int64) (map[sideKey]*Side, error) {
 	sides := map[sideKey]*Side{}
 	rows, err := pool.Query(ctx, `SELECT record_ref, source, array_agg(line_number ORDER BY line_number)::int[]
-		FROM source_rows WHERE run_id = $1 AND `+inScopeMapped+`
+		FROM source_rows WHERE run_id = $1 AND `+sqlInScopeMapped+`
 		GROUP BY record_ref, source`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("source lines of run %d: %w", runID, err)
@@ -142,7 +145,7 @@ func readSides(ctx context.Context, pool *pgxpool.Pool, runID int64) (map[sideKe
 	}
 
 	rows, err = pool.Query(ctx, `SELECT DISTINCT ON (record_ref, source) record_ref, source, raw_payload, posted_date
-		FROM source_rows WHERE run_id = $1 AND `+inScopeMapped+`
+		FROM source_rows WHERE run_id = $1 AND `+sqlInScopeMapped+`
 		ORDER BY record_ref, source, line_number`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("earliest lines of run %d: %w", runID, err)
@@ -196,10 +199,10 @@ func readRecords(ctx context.Context, pool *pgxpool.Pool, runID int64, sides map
 		if rec.Difference, err = decimal.NewFromString(diff); err != nil {
 			return err
 		}
-		if rec.Payments, err = sideWithTotal(sides, rec.RecordRef, sourcePayments, pay); err != nil {
+		if rec.Payments, err = sideWithTotal(sides, rec.RecordRef, source.Payments, pay); err != nil {
 			return err
 		}
-		if rec.Settlements, err = sideWithTotal(sides, rec.RecordRef, sourceSettlement, set); err != nil {
+		if rec.Settlements, err = sideWithTotal(sides, rec.RecordRef, source.Settlement, set); err != nil {
 			return err
 		}
 		out.Records = append(out.Records, rec)
@@ -226,7 +229,7 @@ func readRouted(ctx context.Context, pool *pgxpool.Pool, runID int64, sides map[
 	rows, err := pool.Query(ctx, `SELECT r.record_ref, c.source, c.summary_field, SUM(c.amount)::text
 		FROM summary_contributions c
 		JOIN source_rows r ON r.run_id = c.run_id AND r.source = c.source AND r.line_number = c.line_number
-		WHERE c.run_id = $1 AND r.`+inScopeMapped+`
+		WHERE c.run_id = $1 AND r.`+sqlInScopeMapped+`
 		GROUP BY r.record_ref, c.source, c.summary_field`, runID)
 	if err != nil {
 		return fmt.Errorf("contributions of run %d: %w", runID, err)
@@ -248,9 +251,9 @@ func readRouted(ctx context.Context, pool *pgxpool.Pool, runID int64, sides map[
 
 // readListed reads the unmapped lines and the out-of-scope lines of a run, in file order.
 func readListed(ctx context.Context, pool *pgxpool.Pool, runID int64, out *Reconciliation) error {
-	rows, err := pool.Query(ctx, `SELECT source, file_name, line_number, 'Unmapped', amount::text, posted_date, raw_payload
+	rows, err := pool.Query(ctx, `SELECT source, file_name, line_number, '`+source.ReasonUnmapped+`', amount::text, posted_date, raw_payload
 		FROM source_rows
-		WHERE run_id = $1 AND in_scope AND line_kind IN ('transaction', 'component') AND precedence_tier = 0
+		WHERE run_id = $1 AND `+sqlInScope+` AND precedence_tier = 0
 		ORDER BY source, line_number`, runID)
 	if err != nil {
 		return fmt.Errorf("unmapped lines of run %d: %w", runID, err)
@@ -262,7 +265,7 @@ func readListed(ctx context.Context, pool *pgxpool.Pool, runID int64, out *Recon
 
 	rows, err = pool.Query(ctx, `SELECT source, file_name, line_number, scope_reason, amount::text, posted_date, raw_payload
 		FROM source_rows
-		WHERE run_id = $1 AND NOT in_scope AND line_kind <> 'settlement_header'
+		WHERE run_id = $1 AND NOT in_scope AND line_kind <> '`+source.KindSettlementHeader+`'
 		ORDER BY source, line_number`, runID)
 	if err != nil {
 		return fmt.Errorf("out-of-scope lines of run %d: %w", runID, err)

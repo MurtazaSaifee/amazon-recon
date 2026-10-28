@@ -7,6 +7,7 @@ import (
 	"github.com/xuri/excelize/v2"
 
 	"amazonrecon/internal/recon"
+	"amazonrecon/internal/source"
 )
 
 // ConsolidatedSheet is the name of the sheet with one row per record_ref.
@@ -247,7 +248,7 @@ func writeRecordRow(w *sheetWriter, c consolidatedCols, row int, rec recon.Recor
 	writeRouted(w, row, c.setSum, summary, rec.Settlements, money)
 	writeRouted(w, row, c.setUnm, unmapped, rec.Settlements, money)
 
-	w.text(row, colName(c.status), string(rec.Status), 0)
+	w.text(row, colName(c.status), rec.Status.Label(), 0)
 	w.number(row, colName(c.totalDiff), rec.Difference, money)
 	for i, s := range append(append([]slot{}, summary...), unmapped...) {
 		if s.field == "" {
@@ -263,8 +264,8 @@ func writeRecordRow(w *sheetWriter, c consolidatedCols, row int, rec recon.Recor
 
 // writeUnmappedRow writes one unmapped line on its own row, on its own side's columns.
 func writeUnmappedRow(w *sheetWriter, c consolidatedCols, row int, u recon.ListedLine, money int) {
-	w.text(row, colName(c.status), "Unmapped", 0)
-	if u.Source == "payments" {
+	w.text(row, colName(c.status), source.ReasonUnmapped, 0)
+	if u.Source == source.Payments {
 		writeDescriptive(w, c.payDesc, row, paymentsColumns, u.Raw, u.PostedDate, true)
 		w.number(row, colName(c.payTotal), u.Amount, money)
 		w.text(row, colName(c.payLines), strconv.Itoa(u.LineNumber), 0)

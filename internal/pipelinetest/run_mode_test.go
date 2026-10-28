@@ -107,7 +107,7 @@ func TestBaselineAndFixedDifferOnlyWhereASwitchApplies(t *testing.T) {
 	if !base.TieOut.Settlements.SummaryNet.Equal(fixed.TieOut.Settlements.SummaryNet) {
 		t.Errorf("settlement Summary net differs between modes")
 	}
-	if !base.Components.Amount.Equal(fixed.Components.Amount) || base.Reconciliation.Counts != fixed.Reconciliation.Counts {
+	if !base.Components.Amount.Equal(fixed.Components.Amount) || fmt.Sprint(base.Reconciliation.Counts) != fmt.Sprint(fixed.Reconciliation.Counts) {
 		t.Errorf("reconciliation of the settlement side differs between modes")
 	}
 }

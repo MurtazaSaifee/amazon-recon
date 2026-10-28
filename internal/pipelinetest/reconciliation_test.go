@@ -12,6 +12,7 @@ import (
 	"amazonrecon/internal/ingest"
 	"amazonrecon/internal/recon"
 	"amazonrecon/internal/report"
+	"amazonrecon/internal/source"
 	"amazonrecon/internal/store"
 )
 
@@ -66,21 +67,20 @@ func TestReconciliationOutcomes(t *testing.T) {
 	r := rep.Reconciliation
 
 	t.Run("each status is counted once per record_ref", func(t *testing.T) {
-		if r.Counts.Reconciled != 1 {
-			t.Errorf("reconciled = %d, want 1", r.Counts.Reconciled)
+		want := map[recon.Status]int{
+			recon.Reconciled:               1,
+			recon.ReconciledWithDifference: 1,
+			recon.UnreconciledPayment:      3,
+			recon.UnreconciledSettlement:   2,
 		}
-		if r.Counts.ReconciledWithDifference != 1 {
-			t.Errorf("reconciled with difference = %d, want 1", r.Counts.ReconciledWithDifference)
+		for status, n := range want {
+			if r.Counts[status] != n {
+				t.Errorf("%s = %d, want %d", status.Label(), r.Counts[status], n)
+			}
 		}
-		if r.Counts.UnreconciledPayment != 3 {
-			t.Errorf("unreconciled payments = %d, want 3", r.Counts.UnreconciledPayment)
-		}
-		if r.Counts.UnreconciledSettlement != 2 {
-			t.Errorf("unreconciled settlements = %d, want 2", r.Counts.UnreconciledSettlement)
-		}
-		if r.Counts.UnmappedPayments != 0 || r.Counts.UnmappedSettlements != 2 {
+		if r.UnmappedLines[source.Payments] != 0 || r.UnmappedLines[source.Settlement] != 2 {
 			t.Errorf("unmapped lines payments/settlements = %d/%d, want 0/2",
-				r.Counts.UnmappedPayments, r.Counts.UnmappedSettlements)
+				r.UnmappedLines[source.Payments], r.UnmappedLines[source.Settlement])
 		}
 	})
 

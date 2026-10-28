@@ -189,22 +189,10 @@ func firstInScope(lines []store.MalformedLine) store.MalformedLine {
 // scopedRow decides a line's scope. Scope is the Settlement ID from the
 // Settlement report header, plus status Released for payments lines.
 func scopedRow(fileName string, l source.Line, headerID string) store.SourceRow {
-	r := store.SourceRow{FileName: fileName, Line: l}
-	switch {
-	case l.Kind == source.KindSettlementHeader:
-		r.ScopeReason = "Settlement header (reference total)"
-	case l.SettlementID != headerID:
-		r.ScopeReason = "Other settlement"
-	case l.Source == source.Settlement:
-		r.InScope, r.ScopeReason = true, "Settlement component"
-	case l.Status == "Released":
-		r.InScope, r.ScopeReason = true, "Released"
-	case l.Status == "Deferred":
-		r.ScopeReason = "Deferred"
-	default:
-		r.ScopeReason = "Status " + l.Status
-	}
-	return r
+	in, reason, _ := source.Scope(headerID, source.ScopeCells{
+		Source: l.Source, Kind: l.Kind, SettlementID: l.SettlementID, Status: l.Status,
+	})
+	return store.SourceRow{FileName: fileName, Line: l, InScope: in, ScopeReason: reason}
 }
 
 func readPayments(path string) (source.PaymentsReport, error) {

@@ -29,6 +29,7 @@ import (
 	"amazonrecon/internal/ingest"
 	"amazonrecon/internal/recon"
 	"amazonrecon/internal/report"
+	"amazonrecon/internal/source"
 	"amazonrecon/internal/store"
 	"amazonrecon/internal/timefmt"
 )
@@ -306,18 +307,17 @@ func cmdCounts(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("Run %d, Settlement %s\n", rep.RunID, rep.Settlement.ID)
-	printCounts(rep.Reconciliation.Counts)
+	printCounts(rep.Reconciliation)
 	return nil
 }
 
-func printCounts(c recon.Counts) {
+func printCounts(r recon.Reconciliation) {
 	fmt.Println("Reconciliation counts (record_refs):")
-	fmt.Printf("  %-28s %6d\n", "Reconciled", c.Reconciled)
-	fmt.Printf("  %-28s %6d\n", "Reconciled with difference", c.ReconciledWithDifference)
-	fmt.Printf("  %-28s %6d\n", "Unreconciled payment", c.UnreconciledPayment)
-	fmt.Printf("  %-28s %6d\n", "Unreconciled settlement", c.UnreconciledSettlement)
+	for _, s := range recon.Statuses {
+		fmt.Printf("  %-28s %6d\n", s.Label(), r.Counts[s])
+	}
 	fmt.Printf("  %-28s %6d lines (payments %d, settlements %d; no record_ref)\n", "Unmapped",
-		c.UnmappedPayments+c.UnmappedSettlements, c.UnmappedPayments, c.UnmappedSettlements)
+		r.UnmappedTotal(), r.UnmappedLines[source.Payments], r.UnmappedLines[source.Settlement])
 }
 
 func printTieOut(r recon.Report, out string) {
@@ -334,7 +334,7 @@ func printTieOut(r recon.Report, out string) {
 		}
 		fmt.Printf("  %-56s %18s   %6d %s\n", label, report.FormatAmount(t.Amount), t.Count, unit)
 	}
-	printCounts(r.Reconciliation.Counts)
+	printCounts(r.Reconciliation)
 	amount("Settlement total (Settlement report header)", r.Settlement.Total)
 	total("In-scope Components", r.Components)
 	amount("  minus Settlement total (should be 0.00)", r.ComponentsMinusTotal)

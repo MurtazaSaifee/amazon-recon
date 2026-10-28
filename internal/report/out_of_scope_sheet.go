@@ -4,6 +4,7 @@ import (
 	"github.com/xuri/excelize/v2"
 
 	"amazonrecon/internal/recon"
+	"amazonrecon/internal/source"
 )
 
 // OutOfScopeSheet is the name of the sheet that lists every out-of-scope line with its reason.
@@ -52,13 +53,13 @@ func writeOutOfScope(f *excelize.File, r recon.Report, bold, money int) error {
 		if w.err == nil {
 			w.err = w.f.SetCellInt(w.sheet, w.cell(row, "D"), int64(l.LineNumber))
 		}
-		source := 0
-		if l.Source != "payments" {
-			source = 1
+		side := 0
+		if l.Source != source.Payments {
+			side = 1
 		}
 		// Key fields run from column E (Settlement ID) to column K (Transaction Release Date).
 		for i, col := range outOfScopeColumns[4:11] {
-			if key := col.keys[source]; key != "" {
+			if key := col.keys[side]; key != "" {
 				if v := l.Raw[key]; v != "" {
 					w.text(row, colName(i+5), v, 0)
 				}
