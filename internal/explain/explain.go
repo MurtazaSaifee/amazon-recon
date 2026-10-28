@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
-	"amazonrecon/internal/report"
+	"amazonrecon/internal/money"
 	"amazonrecon/internal/source"
 	"amazonrecon/internal/store"
 )
@@ -194,9 +194,9 @@ func Format(e Explanation) string {
 	fmt.Fprintf(&b, "%s / %s  (Summary field %s, run %d)\n\n", e.Line.Group, e.Line.Name, field, e.RunID)
 
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(tw, "Payments\t%s\n", report.FormatAmount(e.Payments))
-	fmt.Fprintf(tw, "Settlements\t%s\n", report.FormatAmount(e.Settlements))
-	fmt.Fprintf(tw, "Variance\t%s\n", report.FormatAmount(e.Variance))
+	fmt.Fprintf(tw, "Payments\t%s\n", money.Format(e.Payments))
+	fmt.Fprintf(tw, "Settlements\t%s\n", money.Format(e.Settlements))
+	fmt.Fprintf(tw, "Variance\t%s\n", money.Format(e.Variance))
 	tw.Flush()
 
 	b.WriteString("\nContributions by rule\n")
@@ -213,7 +213,7 @@ func Format(e Explanation) string {
 	for i, r := range e.Records {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, r.RecordRef)
 		fmt.Fprintf(&b, "   difference %s (payments %s, settlements %s)\n",
-			report.FormatAmount(r.Difference), report.FormatAmount(r.Payments), report.FormatAmount(r.Settlements))
+			money.Format(r.Difference), money.Format(r.Payments), money.Format(r.Settlements))
 		fmt.Fprintf(&b, "   payments lines:    %s\n", formatLines(r.PaymentsLines))
 		fmt.Fprintf(&b, "   settlement lines:  %s\n", formatLines(r.SettlementLines))
 	}
@@ -227,7 +227,7 @@ func writeRules(tw *tabwriter.Writer, side string, rules []RuleAmount) {
 	}
 	for _, r := range rules {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\n", side, r.RuleID, r.Label, r.AmountField,
-			report.FormatAmount(r.Amount), r.Lines)
+			money.Format(r.Amount), r.Lines)
 		side = ""
 	}
 }

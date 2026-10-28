@@ -19,11 +19,3 @@ func writeStatusCounts(w *sheetWriter, row int, r recon.Reconciliation, bold int
 	w.text(row, "B", "Unmapped lines have no record_ref. They are listed on Consolidated Data, one row each.", 0)
 	return row + 2
 }
-
-// count writes a whole number cell.
-func (w *sheetWriter) count(row int, col string, n int) {
-	if w.err != nil {
-		return
-	}
-	w.err = w.f.SetCellInt(w.sheet, w.cell(row, col), int64(n))
-}

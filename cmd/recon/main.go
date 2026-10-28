@@ -27,6 +27,7 @@ import (
 
 	"amazonrecon/internal/explain"
 	"amazonrecon/internal/ingest"
+	"amazonrecon/internal/money"
 	"amazonrecon/internal/recon"
 	"amazonrecon/internal/report"
 	"amazonrecon/internal/source"
@@ -325,14 +326,14 @@ func printTieOut(r recon.Report, out string) {
 		timefmt.Date(r.Settlement.PeriodStart), timefmt.Date(r.Settlement.PeriodEnd),
 		timefmt.Date(r.Settlement.DepositDate))
 	amount := func(label string, d decimal.Decimal) {
-		fmt.Printf("  %-56s %18s\n", label, report.FormatAmount(d))
+		fmt.Printf("  %-56s %18s\n", label, money.Format(d))
 	}
 	total := func(label string, t recon.Total) {
 		unit := "lines"
 		if t.Count == 1 {
 			unit = "line"
 		}
-		fmt.Printf("  %-56s %18s   %6d %s\n", label, report.FormatAmount(t.Amount), t.Count, unit)
+		fmt.Printf("  %-56s %18s   %6d %s\n", label, money.Format(t.Amount), t.Count, unit)
 	}
 	printCounts(r.Reconciliation)
 	amount("Settlement total (Settlement report header)", r.Settlement.Total)
