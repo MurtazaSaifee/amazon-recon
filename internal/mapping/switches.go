@@ -45,11 +45,6 @@ func SwitchesFor(baseline bool) SwitchSet {
 	return set
 }
 
-// Describe returns the description of a registered switch, or "" when it is not registered.
-func Describe(name Switch) string {
-	return knownSwitches[name].Description
-}
-
 // SwitchSet is the set of enabled interpretation switches.
 type SwitchSet map[Switch]bool
 

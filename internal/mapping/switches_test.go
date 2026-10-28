@@ -69,9 +69,4 @@ func TestSwitchesForMode(t *testing.T) {
 		}
 	})
 
-	t.Run("the registry describes each switch", func(t *testing.T) {
-		if got := Describe("a-fix"); got != "first fix" {
-			t.Fatalf("Describe(a-fix) = %q, want %q", got, "first fix")
-		}
-	})
 }

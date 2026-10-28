@@ -22,9 +22,9 @@ func transferRules() []PaymentRule {
 // prefixSwitchOn is the switch set of a fixed run. It fails when the switch is not registered.
 func prefixSwitchOn(t *testing.T) SwitchSet {
 	t.Helper()
-	set, err := NewSwitchSet("prefix_before_catch_all")
-	if err != nil {
-		t.Fatalf("NewSwitchSet: %v", err)
+	set := SwitchesFor(false)
+	if !set.Enabled(PrefixBeforeCatchAll) {
+		t.Fatalf("a fixed run does not enable %s", PrefixBeforeCatchAll)
 	}
 	return set
 }
