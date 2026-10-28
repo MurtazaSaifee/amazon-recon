@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -177,6 +178,22 @@ func TestRecomputeMismatchFailsReport(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "sales_tax") {
 		t.Errorf("error %q does not name the mismatched field", err)
+	}
+}
+
+// The workbook has four sheets, in this order. The tie-out is part of the Summary sheet, not a sheet of its own.
+func TestWorkbookSheetsAreSummaryConsolidatedAuditAndOutOfScope(t *testing.T) {
+	ctx := context.Background()
+	pool := newPipelineDB(t)
+	res := ingestFixtures(t, pool)
+	rep, err := recon.Build(ctx, pool, res.RunID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	f := writeReport(t, rep)
+	want := []string{"Summary", "Consolidated Data", "Audit Trail", "Out of Scope"}
+	if got := f.GetSheetList(); !slices.Equal(got, want) {
+		t.Errorf("sheets = %v, want %v", got, want)
 	}
 }
 

@@ -156,11 +156,8 @@ func TestRunHeaderShowsRunConfigAndMode(t *testing.T) {
 	}
 
 	f := writeReport(t, rep)
-	checkCell(t, f, "Settlement ID", "B", settlementID)
-	checkCell(t, f, "Run ID", "B", fmt.Sprint(res.RunID))
-	checkCell(t, f, "Config hash (first 12 characters)", "B", rep.ConfigHash[:12])
-	checkCell(t, f, "Mode", "B", "fixed")
-	checkCell(t, f, "Malformed lines (both reports)", "B", "0")
+	checkValue(t, f, report.SummarySheet, "Settlement ID", "C", settlementID)
+	checkValue(t, f, report.SummarySheet, "Run ID", "C", fmt.Sprint(res.RunID))
 	checkValue(t, f, report.SummarySheet, "Config hash (first 12 characters)", "C", rep.ConfigHash[:12])
 	checkValue(t, f, report.SummarySheet, "Mode", "C", "fixed")
 	checkValue(t, f, report.SummarySheet, "Malformed lines (both reports)", "C", "0")

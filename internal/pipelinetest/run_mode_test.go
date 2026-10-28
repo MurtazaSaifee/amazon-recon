@@ -162,7 +162,6 @@ func TestRunModeIsRecorded(t *testing.T) {
 		defer f.Close()
 		checkSheetCell(t, f, "Summary", "Mode", "C", "baseline")
 		checkSheetCell(t, f, "Summary", "Interpretation switches", "C", "none")
-		checkSheetCell(t, f, "Tie-out", "Interpretation switches", "B", "none")
 	})
 
 	if _, err := ingest.Run(ctx, pool, ingest.Inputs{

@@ -10,7 +10,8 @@ import (
 	"amazonrecon/internal/recon"
 )
 
-// SummarySheet is the name of the sheet that holds the Summary, the unmapped block and the tie-out.
+// SummarySheet is the name of the sheet that holds the run header, the Summary, the unmapped block,
+// the tie-out to the Settlement total and the reconciliation counts.
 const SummarySheet = "Summary"
 
 // summaryNote is printed on the sheet. Source signs are kept, so the reader is told how to read them.
@@ -23,25 +24,16 @@ const summaryNote = "Source signs are kept: expenses and refunds are negative, a
 func writeSummary(f *excelize.File, r recon.Report, bold, money int) error {
 	w := &sheetWriter{f: f, sheet: SummarySheet}
 	w.text(1, "B", "Amazon Payments vs Settlement: Summary", bold)
-	w.text(3, "B", "Settlement ID", 0)
-	w.text(3, "C", r.Settlement.ID, 0)
-	w.text(4, "B", "Settlement period (UTC)", 0)
-	w.text(4, "C", r.Settlement.PeriodStart.Format("2006-01-02")+" to "+r.Settlement.PeriodEnd.Format("2006-01-02"), 0)
-	w.text(5, "B", "Run ID", 0)
-	w.text(5, "C", fmt.Sprint(r.RunID), 0)
-	for i, field := range runFields(r) {
-		w.text(6+i, "B", field.label, 0)
-		w.text(6+i, "C", field.value, 0)
-	}
-	w.text(10, "B", summaryNote, 0)
+	row := writeRunHeader(w, r, 3) + 1
+	w.text(row, "B", summaryNote, 0)
+	row += 2
 
-	const header = 11
-	w.text(header, "B", "Summary", bold)
-	w.text(header, "C", "Payments", bold)
-	w.text(header, "D", "Settlements", bold)
-	w.text(header, "E", "Payments minus Settlements", bold)
+	w.text(row, "B", "Summary", bold)
+	w.text(row, "C", "Payments", bold)
+	w.text(row, "D", "Settlements", bold)
+	w.text(row, "E", "Payments minus Settlements", bold)
+	row++
 
-	row := header + 1
 	for _, g := range groupLines(r.Summary.Lines) {
 		if len(g.lines) == 1 && g.lines[0].Line == g.name {
 			// A group with one line of the same name (Paid To Amazon) is that line.
@@ -125,13 +117,19 @@ func writeUnmapped(w *sheetWriter, row int, fields []recon.FieldTotal, money, bo
 	return row + 2
 }
 
-// writeTieOut writes the tie-out, one column per source. Each source's in-scope total is its
-// Summary net plus its routing gaps. The remaining difference is that total minus the Settlement total.
+// writeTieOut writes the tie-out, one column per source, from the in-scope lines to the Settlement
+// total. The residual is explained by the Unreconciled amounts of each side; what is left is the
+// unexplained difference, which must be zero.
 func writeTieOut(w *sheetWriter, row int, r recon.Report, money, bold int) int {
 	p, s := r.TieOut.Payments, r.TieOut.Settlements
 	w.text(row, "B", "Tie-out to the Settlement total", bold)
 	w.text(row, "C", "Payments", bold)
 	w.text(row, "D", "Settlements", bold)
+	row++
+
+	w.text(row, "B", "In-scope lines (count)", 0)
+	w.count(row, "C", p.InScope.Count)
+	w.count(row, "D", s.InScope.Count)
 	row++
 
 	netRow := row
@@ -190,7 +188,6 @@ func writeTieOut(w *sheetWriter, row int, r recon.Report, money, bold int) int {
 	w.formula(row, "D", fmt.Sprintf("D%d-D%d", inScopeRow, totalRow), s.Remaining, money)
 	row++
 
-	// The residual is explained by the in-scope lines of records that are Unreconciled on each side.
 	unreconPaymentRow := row
 	w.text(row, "B", "Unreconciled payment amounts", 0)
 	w.number(row, "C", p.Unreconciled.Amount, money)
@@ -202,6 +199,13 @@ func writeTieOut(w *sheetWriter, row int, r recon.Report, money, bold int) int {
 	w.text(row, "B", "Unexplained difference (must be 0.00)", bold)
 	w.formula(row, "C", fmt.Sprintf("C%d-C%d", remainingRow, unreconPaymentRow), p.Unexplained, money)
 	w.formula(row, "D", fmt.Sprintf("D%d-D%d", remainingRow, unreconSettlementRow), s.Unexplained, money)
+	row++
+
+	w.text(row, "B", "In-scope Released excl. Unreconciled payments", 0)
+	w.number(row, "C", r.ReleasedExcludingUnreconciled, money)
+	row++
+	w.text(row, "B", "Released excl. Unreconciled payments minus Settlement total", 0)
+	w.number(row, "C", r.ReleasedExcludingUnreconciledMinusTotal, money)
 	row++
 
 	w.text(row, "B", fmt.Sprintf("Deferred memo, out of scope (%d lines)", r.Deferred.Count), 0)

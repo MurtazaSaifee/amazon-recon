@@ -35,10 +35,8 @@ func FormatAmount(d decimal.Decimal) string {
 	return out
 }
 
-// TieOutSheet is the name of the sheet that holds the tie-out.
-const TieOutSheet = "Tie-out"
-
-// WriteWorkbook writes the tie-out workbook to path, creating its directory.
+// WriteWorkbook writes the reconciliation workbook to path, creating its directory. The sheets are
+// Summary (with the run header and the tie-out), Consolidated Data, Audit Trail and Out of Scope.
 // Amounts are written as decimal text, so no value passes through float64.
 func WriteWorkbook(path string, r recon.Report) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -47,12 +45,6 @@ func WriteWorkbook(path string, r recon.Report) error {
 	f := excelize.NewFile()
 	defer f.Close()
 	if err := f.SetSheetName("Sheet1", SummarySheet); err != nil {
-		return err
-	}
-	if _, err := f.NewSheet(TieOutSheet); err != nil {
-		return err
-	}
-	if _, err := f.NewSheet(AuditTrailSheet); err != nil {
 		return err
 	}
 	bold, err := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
@@ -66,10 +58,13 @@ func WriteWorkbook(path string, r recon.Report) error {
 	if err := writeSummary(f, r, bold, money); err != nil {
 		return err
 	}
-	if err := writeAuditTrail(f, r.Audit, bold, money); err != nil {
+	if err := writeConsolidated(f, r, bold, money); err != nil {
 		return err
 	}
-	if err := writeConsolidated(f, r, bold, money); err != nil {
+	if _, err := f.NewSheet(AuditTrailSheet); err != nil {
+		return err
+	}
+	if err := writeAuditTrail(f, r.Audit, bold, money); err != nil {
 		return err
 	}
 	if err := writeOutOfScope(f, r, bold, money); err != nil {
@@ -79,51 +74,6 @@ func WriteWorkbook(path string, r recon.Report) error {
 	fullCalc := true
 	if err := f.SetCalcProps(&excelize.CalcPropsOptions{FullCalcOnLoad: &fullCalc}); err != nil {
 		return err
-	}
-
-	w := &sheetWriter{f: f, sheet: TieOutSheet}
-	w.text(1, "A", "Amazon Payments vs Settlement: tie-out", bold)
-
-	w.text(3, "A", "Settlement ID", 0)
-	w.text(3, "B", r.Settlement.ID, 0)
-	w.text(4, "A", "Settlement period (UTC)", 0)
-	w.text(4, "B", r.Settlement.PeriodStart.Format(stamp)+" to "+r.Settlement.PeriodEnd.Format(stamp), 0)
-	w.text(5, "A", "Deposit date (UTC)", 0)
-	w.text(5, "B", r.Settlement.DepositDate.Format(stamp), 0)
-	w.text(6, "A", "Run ID", 0)
-	w.text(6, "B", fmt.Sprint(r.RunID), 0)
-	w.text(7, "A", "Run started / finished", 0)
-	w.text(7, "B", r.StartedAt.Format(stamp)+" / "+r.FinishedAt.Format(stamp), 0)
-	for i, field := range runFields(r) {
-		w.text(8+i, "A", field.label, 0)
-		w.text(8+i, "B", field.value, 0)
-	}
-	for i, file := range r.Files {
-		row := 12 + i
-		w.text(row, "A", file.Source+" file", 0)
-		w.text(row, "B", file.FileName, 0)
-		w.text(row, "C", fmt.Sprintf("sha256 %s; %d physical lines, %d stored",
-			file.SHA256, file.PhysicalLines, file.StoredLines), 0)
-	}
-
-	const top = 15
-	w.text(top-1, "A", "Line", bold)
-	w.text(top-1, "B", "Count", bold)
-	w.text(top-1, "C", "Amount ("+r.Settlement.Currency+")", bold)
-
-	w.amount(top, "Settlement total (Settlement report header)", nil, r.Settlement.Total, money)
-	w.amount(top+1, "In-scope Components", &r.Components.Count, r.Components.Amount, money)
-	w.amount(top+2, "Components minus Settlement total", nil, r.ComponentsMinusTotal, money)
-	w.amount(top+3, "In-scope transaction lines (Released)", &r.TransactionsInScope.Count, r.TransactionsInScope.Amount, money)
-	w.amount(top+4, "Unreconciled payment lines (in scope)", &r.TieOut.Payments.Unreconciled.Count, r.TieOut.Payments.Unreconciled.Amount, money)
-	w.amount(top+5, "In-scope Released excl. Unreconciled payments", nil, r.ReleasedExcludingUnreconciled, money)
-	w.amount(top+6, "Released excl. Unreconciled payments minus Settlement total", nil, r.ReleasedExcludingUnreconciledMinusTotal, money)
-	w.amount(top+7, "Deferred memo (out of scope)", &r.Deferred.Count, r.Deferred.Amount, money)
-
-	w.text(top+9, "A", "Deferred lines have no Transaction Release Date. They are out of scope and shown here as a memo only; they are not part of the tie-out.", 0)
-
-	if w.err != nil {
-		return w.err
 	}
 	if err := f.SaveAs(path); err != nil {
 		return err
@@ -184,22 +134,5 @@ func (w *sheetWriter) formula(row int, col, formula string, value decimal.Decima
 	}
 	if style != 0 {
 		w.err = w.f.SetCellStyle(w.sheet, cell, cell, style)
-	}
-}
-
-// amount writes one tie-out line: a label, an optional count and an amount.
-func (w *sheetWriter) amount(row int, label string, count *int, amount decimal.Decimal, style int) {
-	w.text(row, "A", label, 0)
-	if count != nil {
-		if w.err == nil {
-			w.err = w.f.SetCellInt(w.sheet, w.cell(row, "B"), int64(*count))
-		}
-	}
-	if w.err == nil {
-		// SetCellDefault stores the decimal text as a number cell, so the exact value is kept.
-		w.err = w.f.SetCellDefault(w.sheet, w.cell(row, "C"), amount.StringFixed(2))
-	}
-	if w.err == nil {
-		w.err = w.f.SetCellStyle(w.sheet, w.cell(row, "C"), w.cell(row, "C"), style)
 	}
 }

@@ -37,10 +37,7 @@ const (
 	setHeader                    = 2
 )
 
-const (
-	settlementID = "12000000001"
-	tieOutSheet  = "Tie-out"
-)
+const settlementID = "12000000001"
 
 func TestPipelineTracerBullet(t *testing.T) {
 	ctx := context.Background()
@@ -148,17 +145,17 @@ func TestPipelineTracerBullet(t *testing.T) {
 			t.Fatalf("open workbook: %v", err)
 		}
 		defer f.Close()
-		checkCell(t, f, "Settlement total (Settlement report header)", "C", "1249.56")
-		checkCell(t, f, "In-scope Components", "B", "4")
-		checkCell(t, f, "In-scope Components", "C", "1249.56")
-		checkCell(t, f, "Components minus Settlement total", "C", "0.00")
-		checkCell(t, f, "In-scope transaction lines (Released)", "C", "249.56")
-		checkCell(t, f, "Unreconciled payment lines (in scope)", "B", "3")
-		checkCell(t, f, "Unreconciled payment lines (in scope)", "C", "-1010.00")
-		checkCell(t, f, "In-scope Released excl. Unreconciled payments", "C", "1259.56")
-		checkCell(t, f, "Released excl. Unreconciled payments minus Settlement total", "C", "10.00")
-		checkCell(t, f, "Deferred memo (out of scope)", "B", "2")
-		checkCell(t, f, "Deferred memo (out of scope)", "C", "125.50")
+		const sheet = report.SummarySheet
+		checkValue(t, f, sheet, "Settlement total (Settlement report header)", "D", "1249.56")
+		checkValue(t, f, sheet, "In-scope lines (count)", "D", "4")
+		checkValue(t, f, sheet, "In-scope lines (count)", "C", "5")
+		checkValue(t, f, sheet, "In-scope line total (Summary net plus routing gaps)", "D", "1249.56")
+		checkValue(t, f, sheet, "Remaining difference (in-scope lines minus Settlement total)", "D", "0.00")
+		checkValue(t, f, sheet, "Unreconciled payment amounts", "C", "-1010.00")
+		checkValue(t, f, sheet, "Unexplained difference (must be 0.00)", "D", "0.00")
+		checkValue(t, f, sheet, "In-scope Released excl. Unreconciled payments", "C", "1259.56")
+		checkValue(t, f, sheet, "Released excl. Unreconciled payments minus Settlement total", "C", "10.00")
+		checkValue(t, f, sheet, "Deferred memo, out of scope (2 lines)", "C", "125.50")
 	})
 
 	t.Run("re-ingesting leaves counts and totals unchanged", func(t *testing.T) {
@@ -312,29 +309,6 @@ func assertPostedDate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run
 			t.Errorf("%s line %d date basis = %q, want %q", source, lineNumber, l.PostedDateBasis, wantBasis)
 		}
 	})
-}
-
-// checkCell finds the row whose column A equals label and compares the raw value of column col.
-func checkCell(t *testing.T, f *excelize.File, label, col, want string) {
-	t.Helper()
-	rows, err := f.GetRows(tieOutSheet, excelize.Options{RawCellValue: true})
-	if err != nil {
-		t.Fatalf("read rows: %v", err)
-	}
-	colIdx := int(col[0] - 'A')
-	for _, r := range rows {
-		if len(r) > 0 && r[0] == label {
-			got := ""
-			if colIdx < len(r) {
-				got = r[colIdx]
-			}
-			if got != want {
-				t.Errorf("workbook %q column %s = %q, want %q", label, col, got, want)
-			}
-			return
-		}
-	}
-	t.Errorf("workbook has no row labelled %q", label)
 }
 
 func fileSHA256(t *testing.T, path string) string {
