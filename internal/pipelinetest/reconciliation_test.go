@@ -159,7 +159,7 @@ func TestReconciliationOutcomes(t *testing.T) {
 	})
 }
 
-func TestConsolidatedSheet(t *testing.T) {
+func TestConsolidatedAndOutOfScopeSheets(t *testing.T) {
 	ctx := context.Background()
 	pool := newPipelineDB(t)
 	res := ingestReconFixtures(t, pool)
@@ -176,6 +176,14 @@ func TestConsolidatedSheet(t *testing.T) {
 		t.Fatalf("open workbook: %v", err)
 	}
 	defer f.Close()
+
+	t.Run("the Summary sheet shows the counts per status", func(t *testing.T) {
+		checkValue(t, f, "Summary", "Reconciled", "C", "1")
+		checkValue(t, f, "Summary", "Reconciled with difference", "C", "1")
+		checkValue(t, f, "Summary", "Unreconciled payment", "C", "3")
+		checkValue(t, f, "Summary", "Unreconciled settlement", "C", "2")
+		checkValue(t, f, "Summary", "Unmapped (lines)", "C", "2")
+	})
 
 	t.Run("Consolidated Data follows the sample's column order", func(t *testing.T) {
 		rows := sheetRows(t, f, "Consolidated Data")
@@ -218,6 +226,19 @@ func TestConsolidatedSheet(t *testing.T) {
 		}
 	})
 
+	t.Run("the Out of Scope sheet lists each out-of-scope line", func(t *testing.T) {
+		rows := sheetRows(t, f, "Out of Scope")
+		var found []string
+		for _, r := range rows {
+			if len(r) > 0 && (r[0] == "Deferred" || r[0] == "Other settlement") {
+				found = append(found, fmt.Sprintf("%s|%s|%s", r[0], cellAt(r, "D"), cellAt(r, "L")))
+			}
+		}
+		want := []string{"Deferred|16|100.00", "Deferred|17|25.50", "Other settlement|18|60.00"}
+		if fmt.Sprint(found) != fmt.Sprint(want) {
+			t.Errorf("out-of-scope rows\n got %v\nwant %v", found, want)
+		}
+	})
 }
 
 // consolidatedHeaderRow is the 1-based row of the Consolidated Data column headers.
