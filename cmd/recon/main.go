@@ -1,19 +1,22 @@
 // Command recon ingests the Amazon Payments and Settlement reports into PostgreSQL
 // and writes the reconciliation tie-out workbook.
 //
-//	recon migrate [--reset]
+//	recon migrate [--reset [--force-reset]]
 //	recon ingest  [--input-dir DIR] [--payments FILE] [--settlement FILE]
 //	recon report  [--out PATH]
 //
-// Every command reads the database from --db or $DATABASE_URL.
+// Every command reads the database from --db or $RECON_DATABASE_URL.
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
@@ -25,7 +28,7 @@ import (
 )
 
 const usage = `usage:
-  recon migrate [--db URL] [--reset]
+  recon migrate [--db URL] [--reset [--force-reset]]
   recon ingest  [--db URL] [--input-dir DIR] [--payments FILE] [--settlement FILE]
   recon report  [--db URL] [--out PATH]
 `
@@ -55,22 +58,48 @@ func main() {
 }
 
 func dbFlag(fs *flag.FlagSet) *string {
-	return fs.String("db", os.Getenv("DATABASE_URL"), "PostgreSQL URL (default $DATABASE_URL)")
+	return fs.String("db", os.Getenv("RECON_DATABASE_URL"), "PostgreSQL URL (default $RECON_DATABASE_URL)")
 }
 
 func connect(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	if url == "" {
-		return nil, fmt.Errorf("no database: set --db or DATABASE_URL")
+		return nil, fmt.Errorf("no database: set --db or RECON_DATABASE_URL")
 	}
 	return store.Connect(ctx, url)
+}
+
+// checkResetTarget refuses a reset unless the database name starts with "recon",
+// or force is set. A reset drops the public schema, so a wrong URL must not reach it.
+func checkResetTarget(url string, force bool) error {
+	if force {
+		return nil
+	}
+	u, err := neturl.Parse(url)
+	if err != nil {
+		return fmt.Errorf("refusing to reset: cannot parse database URL: %w", err)
+	}
+	name := strings.TrimPrefix(u.Path, "/")
+	if name == "" {
+		return errors.New("refusing to reset: the database URL names no database")
+	}
+	if !strings.HasPrefix(name, "recon") {
+		return fmt.Errorf("refusing to reset database %q: its name must start with \"recon\" (pass --force-reset to override)", name)
+	}
+	return nil
 }
 
 func cmdMigrate(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("migrate", flag.ExitOnError)
 	db := dbFlag(fs)
 	reset := fs.Bool("reset", false, "drop the public schema first, so the database starts empty")
+	forceReset := fs.Bool("force-reset", false, "allow --reset on a database whose name does not start with \"recon\"")
 	fs.Parse(args)
 
+	if *reset {
+		if err := checkResetTarget(*db, *forceReset); err != nil {
+			return err
+		}
+	}
 	pool, err := connect(ctx, *db)
 	if err != nil {
 		return err

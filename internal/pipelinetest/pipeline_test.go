@@ -1,6 +1,6 @@
 // Package pipelinetest holds the seam-1 tests: synthetic report files go in,
 // the reconciliation report and the workbook come out. They need PostgreSQL
-// and skip with a message when DATABASE_URL is not set.
+// and skip with a message when RECON_DATABASE_URL is not set.
 package pipelinetest
 
 import (
@@ -245,9 +245,9 @@ func TestMalformedLineFailsRunAndReplacesNothing(t *testing.T) {
 // freshDatabase creates an empty database for one test and drops it on cleanup.
 func freshDatabase(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	base := os.Getenv("DATABASE_URL")
+	base := os.Getenv("RECON_DATABASE_URL")
 	if base == "" {
-		t.Skip("DATABASE_URL is not set: skipping the seam-1 pipeline test (it needs PostgreSQL, see docker-compose.yml)")
+		t.Skip("RECON_DATABASE_URL is not set: skipping the seam-1 pipeline test (it needs PostgreSQL, see docker-compose.yml)")
 	}
 	ctx := context.Background()
 	name := "recon_test_" + randomHex(t, 6)
@@ -268,7 +268,7 @@ func freshDatabase(t *testing.T) *pgxpool.Pool {
 
 	u, err := url.Parse(base)
 	if err != nil {
-		t.Fatalf("parse DATABASE_URL: %v", err)
+		t.Fatalf("parse RECON_DATABASE_URL: %v", err)
 	}
 	u.Path = "/" + name
 	pool, err := pgxpool.New(ctx, u.String())

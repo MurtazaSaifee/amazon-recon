@@ -1,12 +1,12 @@
 # Reconciliation pipeline. Override on the command line, for example:
-#   make run INPUT_DIR=/path/to/reports DATABASE_URL=postgres://...
+#   make run INPUT_DIR=/path/to/reports RECON_DATABASE_URL=postgres://...
 PG_PORT      ?= 55432
-DATABASE_URL ?= postgres://recon:recon@localhost:$(PG_PORT)/recon?sslmode=disable
+RECON_DATABASE_URL ?= postgres://recon:recon@localhost:$(PG_PORT)/recon?sslmode=disable
 INPUT_DIR    ?= Assignment_050726_files
 PAYMENTS_FILE ?= amazon_payments_data.csv
 SETTLEMENT_FILE ?= amazon_settlements_data.txt
 OUT          ?= reports/recon_report.xlsx
-export DATABASE_URL
+export RECON_DATABASE_URL
 
 .PHONY: db-up db-down migrate ingest report run test vet
 
