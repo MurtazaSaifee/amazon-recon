@@ -113,7 +113,7 @@ func TestPipelineTracerBullet(t *testing.T) {
 	t.Run("file names, hashes and line counts are recorded", func(t *testing.T) {
 		wantPayments := fileSHA256(t, filepath.Join(fixtures, "synthetic_payments.csv"))
 		wantSettlement := fileSHA256(t, filepath.Join(fixtures, "synthetic_settlement.txt"))
-		got := map[string]recon.FileRecord{}
+		got := map[string]store.FileRecord{}
 		for _, f := range rep.Files {
 			got[f.Source] = f
 		}

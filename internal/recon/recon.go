@@ -40,16 +40,6 @@ type SettlementHeader struct {
 	LineNumber  int
 }
 
-// FileRecord is the ingest record of one report file.
-type FileRecord struct {
-	Source         string
-	FileName       string
-	SHA256         string
-	PhysicalLines  int
-	StoredLines    int
-	MalformedLines int
-}
-
 // Report is the data behind the tie-out. It holds numbers only; the workbook writer formats them.
 type Report struct {
 	RunID          int64
@@ -60,7 +50,7 @@ type Report struct {
 	Switches       []string // enabled interpretation switches, sorted; empty for a baseline run
 	MalformedLines int      // malformed lines of both reports, all stored in ingest_errors
 	Settlement     SettlementHeader
-	Files          []FileRecord
+	Files          []store.FileRecord
 
 	Components          Total // in-scope Settlement components
 	TransactionsInScope Total // in-scope payments lines (Released), Unreconciled ones included
@@ -83,18 +73,16 @@ type Report struct {
 func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error) {
 	rep := Report{RunID: runID}
 
+	// The run register is read once: the status, the times, and the config, mode and switches the run used.
 	var status string
-	if err := pool.QueryRow(ctx,
-		"SELECT status, started_at, COALESCE(finished_at, started_at) FROM ingest_runs WHERE run_id = $1",
-		runID).Scan(&status, &rep.StartedAt, &rep.FinishedAt); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT status, started_at, COALESCE(finished_at, started_at),
+			COALESCE(config_hash, ''), mode, switches
+		FROM ingest_runs WHERE run_id = $1`, runID).Scan(
+		&status, &rep.StartedAt, &rep.FinishedAt, &rep.ConfigHash, &rep.Mode, &rep.Switches); err != nil {
 		return Report{}, fmt.Errorf("run %d: %w", runID, err)
 	}
 	if status != "complete" {
 		return Report{}, fmt.Errorf("run %d is %s, not complete", runID, status)
-	}
-	if err := pool.QueryRow(ctx, "SELECT COALESCE(config_hash, ''), mode, switches FROM ingest_runs WHERE run_id = $1",
-		runID).Scan(&rep.ConfigHash, &rep.Mode, &rep.Switches); err != nil {
-		return Report{}, fmt.Errorf("config of run %d: %w", runID, err)
 	}
 	// A report must describe the config its run used. If the mapping configs changed after the run,
 	// the numbers would describe a config that no run produced, so the report refuses.
@@ -126,7 +114,7 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 		return Report{}, err
 	}
 	for rows.Next() {
-		var f FileRecord
+		var f store.FileRecord
 		if err := rows.Scan(&f.Source, &f.FileName, &f.SHA256, &f.PhysicalLines, &f.StoredLines, &f.MalformedLines); err != nil {
 			rows.Close()
 			return Report{}, err
