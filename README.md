@@ -1,6 +1,6 @@
 # Amazon Payments vs Settlement reconciliation
 
-Reads an Amazon Payments report and a Settlement report, maps every line to a Summary field with config-driven rules, and reconciles the two by `record_ref`. The result is an Excel workbook whose Summary balances to the Settlement total and in which every number traces to a source line.
+Reads an Amazon Payments report and a Settlement report, matches every line to a config-driven rule, routes its amounts to Summary fields, and reconciles the two by `record_ref`. The result is an Excel workbook whose Summary balances to the Settlement total and in which every number traces to a source line.
 
 No LLM is in the money path. All money is `NUMERIC(14,2)` in PostgreSQL and `shopspring/decimal` in Go.
 
@@ -28,7 +28,7 @@ The 26 unreconciled payments cannot be closed: the Transfer (-133,756.51) is a b
 make db-up                       # PostgreSQL 17 in Docker on localhost:$PG_PORT (default 55432)
 ```
 
-`make db-up` runs `PG_PORT=… docker compose up -d --wait`. The Makefile sets `RECON_DATABASE_URL` to the compose database if you have not set it. **The tool reads only `RECON_DATABASE_URL`, never `DATABASE_URL`**, so a personal `DATABASE_URL` cannot point a reset at the wrong database. `migrate --reset` also refuses any database whose name does not start with `recon`.
+`make db-up` runs `PG_PORT=… docker compose up -d --wait`. The Makefile sets `RECON_DATABASE_URL` to the compose database if you have not set it. **The tool reads only `RECON_DATABASE_URL`, never `DATABASE_URL`**, so a personal `DATABASE_URL` cannot point a reset at the wrong database. `migrate --reset` also refuses any database whose name does not start with `recon`, unless `--force-reset` is given.
 
 Put the input files in `Assignment_050726_files/` (the default), or pass `INPUT_DIR=/path/to/reports`:
 
@@ -79,16 +79,16 @@ recon counts
 
 Migrations are in `internal/store/migrations` and applied in filename order.
 
-- **`ingest_runs`**, **`ingest_files`**, **`ingest_errors`**: one run per ingest, with each file's SHA-256 and line counts. A run is complete only after its rows are stored, and reports read the latest complete run. Malformed lines go to `ingest_errors`, and a run with any of them fails before it replaces anything. Re-ingesting the same files is therefore safe.
+- **`ingest_runs`**, **`ingest_files`**, **`ingest_errors`**: one run per ingest, with each file's SHA-256 and line counts. A run is complete only after its rows are stored, and reports read the latest complete run. Malformed lines go to `ingest_errors`. A malformed line that is in scope, or whose scope cannot be read, fails the run before it replaces anything; one out of scope is recorded and ingestion goes on. Re-ingesting the same files is therefore safe.
 - **`source_rows`**: both reports at line grain, with the file name, line number and raw cells (`raw_payload` as JSONB). *Why one table at line grain:* every number in the report traces to a file and line. Both sources share one scope and reconciliation path. Amounts are `NUMERIC(14,2)`.
 - **`payment_mapping_rules`**, **`settlement_mapping_rules`**, **`summary_line_map`**: the configs as data, verbatim. A rule ID is its CSV line number (`P-071`, `S-065`), so a rule can be looked up in the file it came from.
 - **`mapping_rule_history`**: a trigger writes every INSERT, UPDATE and DELETE on the mapping tables, with the old and new row. Fixes are auditable.
 - **`summary_contributions`**: one row per line, per matched rule and per amount routed to a Summary field. *Why:* the Summary is the sum of its Contributions, so any Summary number can be audited down to a source line.
 - **`summary_running`**: running Summary totals per run, source and field, updated per batch inside the ingest transaction. *Why:* the report cross-checks them against a SQL recompute from the Contributions, so a mismatch is caught rather than printed.
-- **Views**: `reconciliation_by_record_ref` (one row per `record_ref` and status), `v_line_variance` and `v_record_variance` (plain SQL over the Contributions, which `recon explain` reads).
+- **Views**: `reconciliation_by_record_ref` (one row per `record_ref`, with its status), `v_line_variance` and `v_record_variance` (plain SQL over the Contributions, which `recon explain` reads).
 - **`ingest_runs`** also records each run's `mode`, `switches` and `config_hash` (migrations 0004 and 0006). A report states which switches produced its numbers.
 
-**Bulk writes use `COPY`**, and the foreign key from `summary_contributions` to `source_rows` is checked in batches (see Performance).
+**Bulk writes use `COPY`**, in batches of 5,000 lines. The foreign key from `summary_contributions` to `source_rows` is checked as each batch lands (see Performance).
 
 ## Assumptions
 
@@ -190,12 +190,12 @@ Figures from the after build (`make after`, reconciling the Settlement with the 
 
 - **`PROGRESS.md`**: the investigation log, from exploration to the final counts, with each variance traced to its rules.
 - **`MAPPING_FIXES.sql`**: each fix as a commented block (defect, rule, old and new value, evidence, Variance closed), plus the interpretation switch and the schema limitation, and the accounting-policy calls.
-- **The workbook**, after `make before` and `make after`: **Summary** (with the Tie-out), **Consolidated Data** (one row per record_ref, with source line numbers), **Audit Trail** (every Contribution), **Out of Scope**.
+- **The workbook**, after `make before` and `make after`: **Summary** (with the Tie-out), **Consolidated Data** (one row per record_ref, then one per unmapped line, with source line numbers), **Audit Trail** (every Contribution), **Out of Scope**.
 - **`recon explain --line "<group>/<line>"`**: for a Summary line, the Variance, the Contributions by rule on each side, and the largest record_refs with their source lines.
 
 ## Performance
 
-A full build (reset, seed, ingest, report) takes about 12–13 s on about 78,000 stored lines. Ingest was waiting on the database, not computing: after a reset, the planner had no statistics for the new `source_rows` table, so each batch's foreign-key check scanned it. `ANALYZE` on each table after it is loaded fixes the plan.
+A full build (reset, seed, ingest, report) takes about 12–13 s on about 78,000 stored lines. Ingest was waiting on the database, not computing: after a reset, the planner had no statistics for the new `source_rows` table, so each batch's foreign-key check scanned it. Running `ANALYZE` on `source_rows` once its rows are loaded, and on `summary_contributions` at the end of the ingest, fixes the plan.
 
 ## Tests
 
