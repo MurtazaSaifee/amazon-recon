@@ -110,6 +110,189 @@ WHERE rule_id = 'P-005'
   AND to_summary_field_when_positive_amount = 'sales_shipping'
   AND to_summary_field_when_negative_amount = 'sales_shipping';
 
+-- ===== Objective fixes, pass B (semantic audit of every rule that fires; ticket 08; approved 2026-10-28) =====
+
+-- Defect:          [pass B, O1] Negative side of an "other" adjustment rule is blank, so negative corrections are dropped
+-- Kind:            mapping defect
+-- Rule:            P-031 (ADJUSTMENT FBA_INVENTORY_REIMBURSEMENT_-_FEE_CORRECTION, other)
+-- Old value:       to_summary_field_when_negative_amount = ''
+-- New value:       to_summary_field_when_negative_amount = 'expenses_other'
+-- Why:             The positive side routes to sales_other and the negative side is blank, so a negative fee correction
+--                  reaches no Summary line. P-031 is the only "other" adjustment rule with a blank non-total side. Its
+--                  siblings route both signs: P-108 (shipping adjustment) sends positive to sales_other and negative to
+--                  expenses_other. The settlement has no counterpart component, so a negative correction would show as a
+--                  Variance if one arrived. P-031 has no in-scope line in this settlement, so this moves no money here.
+-- Variance closed: none. Sales › Other 11.61 → 11.61 and Expenses › Other 0.00 → 0.00 (no line fires P-031).
+UPDATE payment_mapping_rules
+SET to_summary_field_when_negative_amount = 'expenses_other'
+WHERE rule_id = 'P-031' AND amount_field = 'other'
+  AND to_summary_field_when_positive_amount = 'sales_other'
+  AND to_summary_field_when_negative_amount = '';
+
+-- Defect:          [pass B, O2] Refund and low-value-goods tax rules left outside the sales tax route
+-- Kind:            mapping defect
+-- Rule:            P-004 (REFUND low_value_goods); S-012 (REFUND ITEMPRICE GIFTWRAPTAX); S-127 (ORDER ITEMWITHHELDTAX LOWVALUEGOODSTAX-OTHER)
+-- Old value:       P-004 both signs ''; S-012 both signs refunded_expenses; S-127 both signs sales_other
+-- New value:       P-004, S-012 and S-127, both signs: sales_tax
+-- Why:             The accounting policy routes all sales tax to Sales › Tax (the policy block below). These three rules
+--                  carry tax that their siblings already route there: P-006 and P-014 (payments tax), S-004 and S-011 (refund
+--                  tax), and S-118 and S-119 (low-value-goods tax). Left as they are, the same tax lands on two or three
+--                  lines, and P-004 is blank, so its refund tax reaches no line on the payments side. P-004 has 73 matched
+--                  lines, none of them non-zero in this settlement. S-012 and S-127 have no in-scope line.
+-- Variance closed: none. Sales › Tax 13,436.38 → 13,436.38 (both sides); no line had a Variance before or after.
+UPDATE payment_mapping_rules
+SET to_summary_field_when_positive_amount = 'sales_tax',
+    to_summary_field_when_negative_amount = 'sales_tax'
+WHERE rule_id = 'P-004' AND transaction_type = 'REFUND' AND amount_field = 'low_value_goods'
+  AND to_summary_field_when_positive_amount = ''
+  AND to_summary_field_when_negative_amount = '';
+
+UPDATE settlement_mapping_rules
+SET to_summary_field_when_positive_amount = 'sales_tax',
+    to_summary_field_when_negative_amount = 'sales_tax'
+WHERE rule_id = 'S-012' AND transaction_type = 'REFUND' AND amount_type = 'ITEMPRICE' AND amount_description = 'GIFTWRAPTAX'
+  AND to_summary_field_when_positive_amount = 'refunded_expenses'
+  AND to_summary_field_when_negative_amount = 'refunded_expenses';
+
+UPDATE settlement_mapping_rules
+SET to_summary_field_when_positive_amount = 'sales_tax',
+    to_summary_field_when_negative_amount = 'sales_tax'
+WHERE rule_id = 'S-127' AND transaction_type = 'ORDER' AND amount_type = 'ITEMWITHHELDTAX' AND amount_description = 'LOWVALUEGOODSTAX-OTHER'
+  AND to_summary_field_when_positive_amount = 'sales_other'
+  AND to_summary_field_when_negative_amount = 'sales_other';
+
+-- Defect:          [pass B, O3] SAFE-T reimbursement routed to an expense line, and one settlement side with no sign split
+-- Kind:            mapping defect
+-- Rule:            P-059 (SAFE-T_REIMBURSEMENT, other); S-079 (SAFE-T_REIMBURSEMENT, OTHER_TRANSACTIONS)
+-- Old value:       P-059 both signs expenses_fba_fees; S-079 both signs sales_inventory_reimbursements
+-- New value:       P-059 and S-079: positive sales_inventory_reimbursements, negative expenses_reversed_reimbursements
+-- Why:             A SAFE-T reimbursement is money paid to the seller, so it belongs with the reimbursements, not with the
+--                  FBA fees. Every other FBA reimbursement routes positive to Sales › Inventory Reimbursements and negative
+--                  to Expenses › Reversed Reimbursements (the sign split of P-024 to P-036 and S-050 to S-059). P-059 sent
+--                  both signs to an expense line while S-079 sent both to Inventory Reimbursements, so the two sides put the
+--                  same component on different lines. SAFE-T is absent from both files in this run, so this moves no money here.
+-- Variance closed: none. Sales › Inventory Reimbursements 679.69 → 679.69 and Expenses › FBA fees -0.41 → -0.41 (no lines).
+UPDATE payment_mapping_rules
+SET to_summary_field_when_positive_amount = 'sales_inventory_reimbursements',
+    to_summary_field_when_negative_amount = 'expenses_reversed_reimbursements'
+WHERE rule_id = 'P-059' AND transaction_type = 'SAFE-T_REIMBURSEMENT' AND amount_field = 'other'
+  AND to_summary_field_when_positive_amount = 'expenses_fba_fees'
+  AND to_summary_field_when_negative_amount = 'expenses_fba_fees';
+
+UPDATE settlement_mapping_rules
+SET to_summary_field_when_positive_amount = 'sales_inventory_reimbursements',
+    to_summary_field_when_negative_amount = 'expenses_reversed_reimbursements'
+WHERE rule_id = 'S-079' AND transaction_type = 'SAFE-T_REIMBURSEMENT' AND amount_type = 'OTHER_TRANSACTIONS'
+  AND amount_description = 'SAFE-T_REIMBURSEMENT'
+  AND to_summary_field_when_positive_amount = 'sales_inventory_reimbursements'
+  AND to_summary_field_when_negative_amount = 'sales_inventory_reimbursements';
+
+-- Defect:          [pass B, O4] Refund gift wrap, goodwill, restocking and other routed to a field with no Summary line
+-- Kind:            mapping defect
+-- Rule:            P-015 and P-016 (payments REFUND); S-005, S-006 and S-007 (settlement REFUND ITEMPRICE)
+-- Old value:       P-015, P-016, S-005, S-006 and S-007, both signs: total_refund_expense_or_sales_amt
+-- New value:       P-015, S-005 and S-006, both signs: refunded_sales; P-016 and S-007, both signs: refunded_expenses
+-- Why:             total_refund_expense_or_sales_amt has no row in the Summary-line map, so these amounts reach no Summary
+--                  line on either side, and the Variance check cannot see them. Gift wrap and goodwill reduce the refund's
+--                  sale, so they go to Refunded sales, as the refund product sales do (P-009, S-013). Restocking and other
+--                  refund amounts are costs of the refund, so they go to Refund expenses, with the refund fees (P-011, P-018,
+--                  S-016 to S-018). These are the recommended targets; a reviewer may choose other lines. The payments
+--                  "other" column does not name goodwill, so P-016 and S-006 are not a matched pair, and the split between
+--                  them is a judgement. None of the five rules has an in-scope line in this settlement.
+-- Variance closed: none. Refunds › Refunded sales -2,031.37 → -2,031.37 and Refunds › Refund expenses 258.87 → 258.87 (no lines).
+UPDATE payment_mapping_rules
+SET to_summary_field_when_positive_amount = 'refunded_sales',
+    to_summary_field_when_negative_amount = 'refunded_sales'
+WHERE rule_id = 'P-015' AND transaction_type = 'REFUND' AND amount_field = 'gift_wrap_credits'
+  AND to_summary_field_when_positive_amount = 'total_refund_expense_or_sales_amt'
+  AND to_summary_field_when_negative_amount = 'total_refund_expense_or_sales_amt';
+
+UPDATE payment_mapping_rules
+SET to_summary_field_when_positive_amount = 'refunded_expenses',
+    to_summary_field_when_negative_amount = 'refunded_expenses'
+WHERE rule_id = 'P-016' AND transaction_type = 'REFUND' AND amount_field = 'other'
+  AND to_summary_field_when_positive_amount = 'total_refund_expense_or_sales_amt'
+  AND to_summary_field_when_negative_amount = 'total_refund_expense_or_sales_amt';
+
+UPDATE settlement_mapping_rules
+SET to_summary_field_when_positive_amount = 'refunded_sales',
+    to_summary_field_when_negative_amount = 'refunded_sales'
+WHERE rule_id IN ('S-005', 'S-006') AND transaction_type = 'REFUND' AND amount_type = 'ITEMPRICE'
+  AND to_summary_field_when_positive_amount = 'total_refund_expense_or_sales_amt'
+  AND to_summary_field_when_negative_amount = 'total_refund_expense_or_sales_amt';
+
+UPDATE settlement_mapping_rules
+SET to_summary_field_when_positive_amount = 'refunded_expenses',
+    to_summary_field_when_negative_amount = 'refunded_expenses'
+WHERE rule_id = 'S-007' AND transaction_type = 'REFUND' AND amount_type = 'ITEMPRICE'
+  AND amount_description = 'RESTOCKINGFEE'
+  AND to_summary_field_when_positive_amount = 'total_refund_expense_or_sales_amt'
+  AND to_summary_field_when_negative_amount = 'total_refund_expense_or_sales_amt';
+
+-- Defect:          [pass B, O5] Buyer recharge and other adjustments routed to a field with no Summary line
+-- Kind:            mapping defect
+-- Rule:            P-020, P-038, P-150 (payments, other); S-028, S-030 (settlement OTHER-TRANSACTION); S-138 (PROMOTION_ADJUSTMENT)
+-- Old value:       all six rules, both signs: total_adjustment_other_buyer_recharge_amt
+-- New value:       P-020, P-038, P-150, S-028, S-030: positive sales_other, negative expenses_other;
+--                  S-138: both signs expenses_promotional_rebates
+-- Why:             total_adjustment_other_buyer_recharge_amt has no Summary line, so these adjustments reach none. The
+--                  house pattern for other adjustments is P-108 and S-041: a positive adjustment is income (Sales › Other)
+--                  and a negative one is a cost (Expenses › Other). A promotion adjustment is a promotion, so it goes with
+--                  the ORDER promotions in Promo rebates (S-072, S-073). S-138 has no payments counterpart, so it would show
+--                  as a Variance if it fired; it has no in-scope line here.
+-- Variance closed: none. Sales › Other 11.61 → 11.61, Expenses › Other 0.00 → 0.00 and Expenses › Promo rebates -11,273.53 → -11,273.53 (no lines).
+UPDATE payment_mapping_rules
+SET to_summary_field_when_positive_amount = 'sales_other',
+    to_summary_field_when_negative_amount = 'expenses_other'
+WHERE rule_id IN ('P-020', 'P-038', 'P-150') AND amount_field = 'other'
+  AND to_summary_field_when_positive_amount = 'total_adjustment_other_buyer_recharge_amt'
+  AND to_summary_field_when_negative_amount = 'total_adjustment_other_buyer_recharge_amt';
+
+UPDATE settlement_mapping_rules
+SET to_summary_field_when_positive_amount = 'sales_other',
+    to_summary_field_when_negative_amount = 'expenses_other'
+WHERE rule_id IN ('S-028', 'S-030') AND transaction_type = 'OTHER-TRANSACTION'
+  AND to_summary_field_when_positive_amount = 'total_adjustment_other_buyer_recharge_amt'
+  AND to_summary_field_when_negative_amount = 'total_adjustment_other_buyer_recharge_amt';
+
+UPDATE settlement_mapping_rules
+SET to_summary_field_when_positive_amount = 'expenses_promotional_rebates',
+    to_summary_field_when_negative_amount = 'expenses_promotional_rebates'
+WHERE rule_id = 'S-138' AND amount_description = 'PROMOTION_ADJUSTMENT'
+  AND to_summary_field_when_positive_amount = 'total_adjustment_other_buyer_recharge_amt'
+  AND to_summary_field_when_negative_amount = 'total_adjustment_other_buyer_recharge_amt';
+
+-- Defect:          [pass B, O6] Micro deposit round-off routed to a field with no Summary line; its Summary line has no field
+-- Kind:            mapping defect
+-- Rule:            P-061 (TRANSFER MICRO_DEPOSIT, other); S-060 (TRANSFERS MICRO_DEPOSIT); Summary line Expenses › Micro Deposit
+-- Old value:       P-061 and S-060, both signs: bank_account_transfer_round_off;
+--                  Summary line Expenses › Micro Deposit: summary_field is empty
+-- New value:       P-061 and S-060, both signs: expenses_micro_deposit;
+--                  Summary line Expenses › Micro Deposit: summary_field = 'expenses_micro_deposit'
+-- Why:             bank_account_transfer_round_off has no Summary line. The Summary already has an Expenses › Micro Deposit
+--                  line (display order 200) with no field, and that is the line a micro-deposit amount belongs on. The first
+--                  statement sets the field on that existing row of summary_line_map. The row is in the database, so the
+--                  change is in mapping_rule_history, and configs/summary_line_map.csv is unchanged. Both rules route both
+--                  signs to the one field, so the two sides meet on the same line. Neither rule has an in-scope line here.
+-- Variance closed: none. Expenses › Micro Deposit 0.00 → 0.00 (no lines). Nothing routes to bank_account_transfer_round_off any more.
+UPDATE summary_line_map
+SET summary_field = 'expenses_micro_deposit'
+WHERE summary_group = 'Expenses' AND summary_line = 'Micro Deposit' AND summary_field IS NULL;
+
+UPDATE payment_mapping_rules
+SET to_summary_field_when_positive_amount = 'expenses_micro_deposit',
+    to_summary_field_when_negative_amount = 'expenses_micro_deposit'
+WHERE rule_id = 'P-061' AND transaction_type = 'TRANSFER' AND amount_field = 'other'
+  AND to_summary_field_when_positive_amount = 'bank_account_transfer_round_off'
+  AND to_summary_field_when_negative_amount = 'bank_account_transfer_round_off';
+
+UPDATE settlement_mapping_rules
+SET to_summary_field_when_positive_amount = 'expenses_micro_deposit',
+    to_summary_field_when_negative_amount = 'expenses_micro_deposit'
+WHERE rule_id = 'S-060' AND transaction_type = 'TRANSFERS' AND amount_type = 'MICRO_DEPOSIT'
+  AND to_summary_field_when_positive_amount = 'bank_account_transfer_round_off'
+  AND to_summary_field_when_negative_amount = 'bank_account_transfer_round_off';
+
 -- ===== Interpretation defect (fixed in the matching logic, not in this file) =====
 
 -- Defect:          The Transfer line is not matched by its rule, so it falls to the Catch-all and is summarised as a fee
