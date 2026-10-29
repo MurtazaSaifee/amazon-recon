@@ -175,6 +175,17 @@ Figures from the after build (`make after`, reconciling the Settlement with the 
 - **The Transfer (1).** A bank payout of −133,756.51, not a sale. It matches the transfer rule, which has no Summary field, so it sits outside the Summary on purpose and is shown on the Tie-out.
 - **Zero-value Order lines (25).** Every amount column on these lines is 0.00, and the settlement report has no Component for any of their orders. Zero-amount Components do occur in the file, but only beside non-zero Components of the same record, so there is nothing to pair these 25 with.
 
+## Self-checks: how the pipeline catches its own mistakes
+
+- **Fix files apply all or nothing.** `apply-fixes` runs the whole file in one transaction, and commits nothing if a guarded statement changes no rows (`internal/store`; `TestApplyFixesIsOneTransaction`).
+- **A stale config is refused.** A report refuses a run whose mapping configs have changed since ingest, and asks for ingest to be re-run (`internal/recon`; `TestReportRefusesRunWhoseConfigChanged`).
+- **Running totals are recomputed.** The Summary's running totals are checked against a SQL recompute from the Contributions. A mismatch fails the report and names the field (`internal/recon`; `TestRecomputeMismatchFailsReport`).
+- **The tie-out has no plug.** "Unexplained difference (must be 0.00)" is the residual minus the Unreconciled amounts read from reconciliation status, with no hardcoded adjustment (`internal/recon`, `internal/report`).
+- **Ambiguity is warned and stored.** A winning tier with several rules for one Amount field, and a record_ref token that looks like a field name but is not one, each raise a warning stored with the line (`internal/mapping`; `source_rows.warnings`).
+- **A malformed in-scope line stops the run.** The run fails before anything is replaced, and the previous complete run stays the latest (`internal/ingest`; `TestMalformedLineInScopeFailsTheRun`).
+- **Re-ingesting replaces, it does not add.** Ingesting the same files again replaces the stored lines, Contributions and totals, and leaves the counts unchanged (`internal/store`; `TestReingestReplacesEarlierRowsAndKeepsCountsAndTotals`).
+- **Resets are guarded.** `migrate --reset` refuses a database whose name does not start with `recon`, unless `--force-reset` is given. The tool reads only `RECON_DATABASE_URL` (`cmd/recon`; `TestCheckResetTarget`).
+
 ## Where to look
 
 - **`PROGRESS.md`**: the investigation log, from exploration to the final counts, with each variance traced to its rules.
