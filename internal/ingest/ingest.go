@@ -160,11 +160,11 @@ func run(ctx context.Context, pool *pgxpool.Pool, runID int64, in Inputs) (Resul
 	}); err != nil {
 		return Result{}, fmt.Errorf("record settlement file: %w", err)
 	}
-	if err := store.WriteSource(ctx, tx, runID, source.Settlement, settlementRows); err != nil {
-		return Result{}, fmt.Errorf("store settlement lines: %w", err)
-	}
-	if err := store.WriteSource(ctx, tx, runID, source.Payments, paymentRows); err != nil {
-		return Result{}, fmt.Errorf("store payments lines: %w", err)
+	if err := store.WriteSources(ctx, tx, runID, []store.SourceLines{
+		{Source: source.Settlement, Rows: settlementRows},
+		{Source: source.Payments, Rows: paymentRows},
+	}); err != nil {
+		return Result{}, fmt.Errorf("store lines: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Result{}, fmt.Errorf("commit: %w", err)
