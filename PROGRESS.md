@@ -411,7 +411,7 @@ Counts per status (record_refs; Unmapped counts lines): Reconciled 13,289; Recon
 
 Notes on the after state:
 - Tier numbers moved. The prefix tier is 3, so the catch-all tiers are now 4 and 5. The baseline section above gives P-110 as tier 4, which was its number in the baseline run.
-- The Transfer's record_ref is now `TRANSFER|<its description>|90000000001|2026-07-18`, where the description carries the account's last digits. The Consolidated sheet shows the record_ref, so it shows those digits too. That is a presentation question, not a mapping one. It is still open after pass B (see the notes there and under Final results).
+- The Transfer's record_ref is now `TRANSFER|<its description>|90000000001|2026-07-18`, where the description carries the account's last digits. The Consolidated sheet shows the record_ref, so it shows those digits too. That is a presentation question, not a mapping one. It is decided: the digits are not masked (see the notes there and under Final results).
 
 Tax-shaped rules left unchanged for pass B (not part of the policy):
 - Fired, with no effect on any Summary line: P-004 (REFUND low_value_goods, no Summary field, in-scope sum 0.00). P-013 (REFUND marketplace_withheld_tax) and P-074 (ORDER marketplace_withheld_tax) route nothing, because the payments report has no column of that name, so their amount is always 0.
@@ -561,7 +561,7 @@ The mapping history for this build holds 62 changes after the seed: 17 payments 
 
 ### Notes for the next reader
 
-- The Transfer's record_ref in the Consolidated sheet still carries the account's last digits, as pass A recorded. The author has not decided that presentation question, so I left it as it was. It needs an answer before the workbook is shared.
+- The Transfer's record_ref in the Consolidated sheet carries the account's last digits, as pass A recorded. That presentation question is decided: the digits are not masked. The workbook and the dump go privately to PortOne, who supplied the data. The public repository redacts the digits (999) and the settlement ID (90000000001) throughout its history.
 - The routing for O4 is a judgement: the payments "other" refund column and the settlement goodwill component are not the same economic item, so they route to different lines.
 - The after workbook was regenerated with `make after`. The Summary values above are read from the database, and they match the expected figures.
 
@@ -658,4 +658,4 @@ The SQL checks, all run on the after run: the Unreconciled payment records group
 
 ### Open items
 
-- The Transfer's `record_ref` in the Consolidated Data sheet carries the account's last three digits. The author has not decided whether to mask it. It must be decided before the workbook goes with the submission email.
+There are none. The Transfer's `record_ref` in the Consolidated Data sheet carries the account's last three digits, and that is decided: the digits are not masked. The workbook and the dump go privately to PortOne, who supplied the data. The public repository redacts the digits (999) and the settlement ID (90000000001) throughout its history.
