@@ -154,37 +154,78 @@ type Contribution struct {
 	SummaryField string
 }
 
-// WriteSource replaces every stored line of one report with rows, and writes the
+// SourceLines is one report's lines for a run, ready to store.
+type SourceLines struct {
+	Source string
+	Rows   []SourceRow
+}
+
+// WriteSources replaces the stored lines of each report with its rows, then writes the
 // Contributions and running Summary totals of its in-scope lines, in batches inside tx.
 // Re-ingesting a report therefore never double-counts.
-func WriteSource(ctx context.Context, tx pgx.Tx, runID int64, reportSource string, rows []SourceRow) error {
-	if _, err := tx.Exec(ctx, "DELETE FROM source_rows WHERE source = $1", reportSource); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, "DELETE FROM summary_running WHERE source = $1", reportSource); err != nil {
-		return err
-	}
-	for start := 0; start < len(rows); start += batchSize {
-		end := min(start+batchSize, len(rows))
-		if err := writeBatch(ctx, tx, runID, reportSource, rows[start:end]); err != nil {
+//
+// It works in two phases. Phase one stores every line of every report, then runs
+// ANALYZE on source_rows. Phase two stores the Contributions, whose foreign key
+// checks against source_rows. Without the ANALYZE, Postgres can keep a plan for that
+// check from when source_rows was empty, and each batch then scans the whole table.
+func WriteSources(ctx context.Context, tx pgx.Tx, runID int64, reports []SourceLines) error {
+	for _, r := range reports {
+		if _, err := tx.Exec(ctx, "DELETE FROM source_rows WHERE source = $1", r.Source); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(ctx, "DELETE FROM summary_running WHERE source = $1", r.Source); err != nil {
+			return err
+		}
+	}
+	for _, r := range reports {
+		for start := 0; start < len(r.Rows); start += batchSize {
+			end := min(start+batchSize, len(r.Rows))
+			if err := copySourceRows(ctx, tx, runID, r.Source, r.Rows[start:end]); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := tx.Exec(ctx, "ANALYZE source_rows"); err != nil {
+		return fmt.Errorf("analyze source_rows: %w", err)
+	}
+	for _, r := range reports {
+		for start := 0; start < len(r.Rows); start += batchSize {
+			end := min(start+batchSize, len(r.Rows))
+			if err := writeContributions(ctx, tx, runID, r.Source, r.Rows[start:end]); err != nil {
+				return err
+			}
+		}
+	}
+	// After a reset, summary_contributions has no statistics, and the report's joins
+	// to source_rows then take minutes. ANALYZE gives the planner statistics for them.
+	if _, err := tx.Exec(ctx, "ANALYZE summary_contributions"); err != nil {
+		return fmt.Errorf("analyze summary_contributions: %w", err)
 	}
 	return nil
 }
 
-// writeBatch stores one batch of lines, its Contributions, and adds its routed amounts to the running totals.
-func writeBatch(ctx context.Context, tx pgx.Tx, runID int64, reportSource string, rows []SourceRow) error {
+// copySourceRows stores one batch of lines.
+func copySourceRows(ctx context.Context, tx pgx.Tx, runID int64, reportSource string, rows []SourceRow) error {
 	copyRows := make([][]any, 0, len(rows))
-	var contributions [][]any
-	totals := map[string]decimal.Decimal{}
-	var fields []string
 	for _, r := range rows {
 		v, err := sourceRowValues(runID, r)
 		if err != nil {
 			return err
 		}
 		copyRows = append(copyRows, v)
+	}
+	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"source_rows"}, sourceRowColumns, pgx.CopyFromRows(copyRows)); err != nil {
+		return fmt.Errorf("store %s lines: %w", reportSource, err)
+	}
+	return nil
+}
+
+// writeContributions stores the Contributions of one batch of lines, and adds their routed amounts to the running totals.
+func writeContributions(ctx context.Context, tx pgx.Tx, runID int64, reportSource string, rows []SourceRow) error {
+	var contributions [][]any
+	totals := map[string]decimal.Decimal{}
+	var fields []string
+	for _, r := range rows {
 		if !r.InScope || r.Mapping == nil {
 			continue
 		}
@@ -199,9 +240,6 @@ func writeBatch(ctx context.Context, tx pgx.Tx, runID int64, reportSource string
 			}
 			totals[c.SummaryField] = totals[c.SummaryField].Add(c.Amount)
 		}
-	}
-	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"source_rows"}, sourceRowColumns, pgx.CopyFromRows(copyRows)); err != nil {
-		return fmt.Errorf("store %s lines: %w", reportSource, err)
 	}
 	if len(contributions) > 0 {
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"summary_contributions"},

@@ -549,3 +549,32 @@ The mapping history for this build holds 62 changes after the seed: 17 payments 
 - The Transfer's record_ref in the Consolidated sheet still carries the account's last digits, as pass A recorded. The reviewer has not decided that presentation question, so I left it as it was. It needs an answer before the workbook is shared.
 - The routing for O4 is a judgement: the payments "other" refund column and the settlement goodwill component are not the same economic item, so they route to different lines.
 - The after workbook was regenerated with `make after`. The Summary values above are read from the database, and they match the expected figures.
+
+## 2026-10-29: Performance: ingest wall time versus CPU time
+
+### Symptom
+
+Ingesting the real files took about 360 s of wall-clock time (measured on a fresh database) but only 2.1 s of user CPU. The work was waiting on the database, not computing. The `report` step after a fresh reset was also slow (about 212 s), with 10 s of CPU in the whole build.
+
+### Cause
+
+- Ingest: inside the single ingest transaction, each batch COPYed `source_rows` and then `summary_contributions`. `summary_contributions` has a foreign key to `source_rows`. Postgres cached the plan for that check while `source_rows` was fresh and had no statistics (after `migrate --reset`), so each batch scanned the whole table and the inserts went quadratic. 105k contribution inserts took 5m59s on fresh tables, against 0.3 s per 20k rows once the tables were analysed.
+- Report: after a reset `summary_contributions` has no statistics either. The report's joins to `source_rows` then planned badly and took about 212 s. Running `ANALYZE summary_contributions` first brings it to about 7 s.
+
+### Fix
+
+- `store.WriteSources` replaces `WriteSource` and works in two phases inside the ingest transaction. Phase one deletes each report's old lines (as before) and COPYs every `source_rows` line for both reports, then runs `ANALYZE source_rows`, which sees the transaction's own rows and so invalidates the cached plan. Phase two COPYs `summary_contributions` and upserts `summary_running` in the same 5000-row batches as before.
+- The same transaction ends with `ANALYZE summary_contributions`, so the report and reconciliation queries have statistics straight after ingest.
+- The foreign key, the batching, the error wrapping and all money logic are unchanged. The existing tests pass and none are skipped.
+
+### Timings (real files, `recon_perf3`, `INPUT_DIR` set to the assignment files)
+
+| Run | Wall (s) | User CPU (s) |
+|---|---|---|
+| Ingest only, before the fix (fresh database) | 359.9 | 2.1 |
+| `make after`, before the fix (two runs) | 214.7, 223.4 | about 10 |
+| Ingest only, after the fix | 4.2 | 2.1 |
+| `make before`, after the fix | 13.4 | 10.8 |
+| `make after`, after the fix | 12.2 | 10.4 |
+
+After the fix the numbers do not move: every Summary variance is 0.00, Amazon fees are -35,790.24 and FBA fees are -96,803.58 on both sides, the Settlement tie and the payments unexplained difference are 0.00, and the counts are Reconciled 13,289, with difference 0, Unreconciled payment 26, Unreconciled settlement 0, Unmapped 0.
