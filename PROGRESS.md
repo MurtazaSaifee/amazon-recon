@@ -112,7 +112,7 @@ Each source is grouped by record_ref over its in-scope mapped lines. The payment
 Checks:
 - An independent SQL query (sum of payments per record_ref against sum of Components per record_ref, outside the view) finds the same 13,289 records with both sides, and none of them differ.
 - The Transfer line is an Unreconciled payment, record_ref `|90000000001|2026-07-18`, -133,756.51.
-- Of the 26 Unreconciled payments, 25 are Order lines whose `total` is 0.00 and which have no Component. The Transfer is the only one with an amount. Amazon's Settlement report carries no Component for a zero amount, so these 25 fall out as Unreconciled payment under the definition. *Correction, verified 2026-10-29: that is too broad. The file does carry zero-amount Components, but only beside non-zero Components of the same record. The accurate statement is that none of these 25 orders has any settlement row. See Final results.* Left as it is: this is a classification question, not a config defect, and it is recorded here for the reviewer.
+- Of the 26 Unreconciled payments, 25 are Order lines whose `total` is 0.00 and which have no Component. The Transfer is the only one with an amount. Amazon's Settlement report carries no Component for a zero amount, so these 25 fall out as Unreconciled payment under the definition. *Correction, verified 2026-10-29: that is too broad. The file does carry zero-amount Components, but only beside non-zero Components of the same record. The accurate statement is that none of these 25 orders has any settlement row. See Final results.* Left as it is: this is a classification question, not a config defect, and it is recorded here for the author's decision.
 - Largest Reconciled-with-difference record_refs by absolute difference: none. No record_ref has a non-zero difference, so there is no top five to list.
 - Tie-out figures are unchanged from ticket 01: Components 212,118.95 (difference 0.00), Released excluding Transfer 212,118.95 (difference 0.00), Deferred memo 43,540.07 over 2,398 lines.
 
@@ -338,7 +338,7 @@ Settlements  S-022  REFUND / PROMOTION / SHIPPING           amount              
 - Rule IDs: P-014 (payments, empty Summary field); S-004, S-011, S-020 (settlements, `refunded_expenses`).
 - Evidence sums: -41.09 - 3.19 + 1.69 = -42.59, which equals the in-scope P-014 total. No S-004 line is positive (13 negative, 0 positive), so nothing goes to the unmapped `total_refund_expense_or_sales_amt`.
 - Hypotheses ruled out: a settlement-side fee problem (the non-tax refund rows agree with the payments refund fees to the cent: P-011 28.89 = S-016 28.89; P-018 117.36 = S-017 146.62 + S-018 -29.26; P-017 112.62 = S-021 64.76 + S-022 47.86); a sign problem (the S-020 positive lines, 8 of them, route to `refunded_expenses` on either sign).
-- Fix: P-014 has no fix of its own. It is closed by the tax policy (refund tax to Sales › Tax, both sides), which the reviewer approved on 2026-10-28. The decision is in the accounting-policy section of MAPPING_FIXES.sql.
+- Fix: P-014 has no fix of its own. It is closed by the tax policy (refund tax to Sales › Tax, both sides), which was approved by the author on 2026-10-28. The decision is in the accounting-policy section of MAPPING_FIXES.sql.
 
 ### Hypotheses ruled out for the whole run
 
@@ -351,8 +351,8 @@ Settlements  S-022  REFUND / PROMOTION / SHIPPING           amount              
 
 - Objective mapping fixes F1 to F4 go in MAPPING_FIXES.sql, one block each, guarded by their old values.
 - The Transfer goes to the matching logic, as the switch `prefix_before_catch_all`, with seam-2 tests in both modes.
-- The tax split is a schema limitation, documented in MAPPING_FIXES.sql. Routing all tax to Sales › Tax (both signs) is an accounting-policy call, applied in its own section after the reviewer's approval on 2026-10-28.
-- Every fix is confirmed by the reviewer before it is applied. The approvals were given on 2026-10-28.
+- The tax split is a schema limitation, documented in MAPPING_FIXES.sql. Routing all tax to Sales › Tax (both signs) is an accounting-policy call, applied in its own section after the author's approval on 2026-10-28.
+- Every fix is confirmed by the author before it is applied. The approvals were given on 2026-10-28.
 
 ### After the fixes (Step 5 pass A, the after build)
 
@@ -468,7 +468,7 @@ Six of the fired FBA reimbursement and adjustment rules have only positive lines
 
 ### Findings, their class and their outcome
 
-The class follows the file's block format: a mapping defect is fixed with an UPDATE, an accounting-policy call goes to the reviewer. "Applied" means the statement is in `MAPPING_FIXES.sql` and ran in the after build. The reviewer's decisions were given on 2026-10-28.
+The class follows the file's block format: a mapping defect is fixed with an UPDATE, an accounting-policy call goes to the author for a decision. "Applied" means the statement is in `MAPPING_FIXES.sql` and ran in the after build. The author's decisions are dated 2026-10-28.
 
 | ID | Class | Rules | Finding | Outcome |
 |---|---|---|---|---|
@@ -478,11 +478,11 @@ The class follows the file's block format: a mapping defect is fixed with an UPD
 | O4 | Mapping defect | P-015, P-016, S-005, S-006, S-007 | Refund gift wrap, goodwill, restocking and other route to `total_refund_expense_or_sales_amt`, which has no Summary line | Applied: gift wrap and goodwill to Refunded sales; restocking and other to Refund expenses. These are the recommended targets. P-016 (payments "other") and S-006 (goodwill) are not a matched pair, so this is a judgement and not a reconciliation. No lines here |
 | O5 | Mapping defect | P-020, P-038, P-150, S-028, S-030, S-138 | Buyer recharge and other adjustments route to `total_adjustment_other_buyer_recharge_amt`, which has no Summary line | Applied: house pattern (positive to Sales › Other, negative to Expenses › Other); S-138 promotion adjustment to Promo rebates. No lines here |
 | O6 | Mapping defect | P-061, S-060, Summary line Expenses › Micro Deposit | Micro deposit round-off routes to `bank_account_transfer_round_off`, which has no Summary line, and the Summary line that should receive it has no field | Applied: the Summary-line map row Expenses › Micro Deposit gets the field `expenses_micro_deposit`, and both rules route there. The change is an UPDATE of the existing row (display order 200), so it is in `mapping_rule_history`. The CSV is unchanged |
-| P1 | Accounting-policy call | P-073; S-067, S-068, S-069 | The ORDER FBA fee sits in Amazon fees, although the payments column is labelled "fulfilment by amazon fees" and the Summary has an FBA fees line | Applied (reviewer, 2026-10-28). Both sides move to Expenses › FBA fees. See the P1 effect below |
-| P2 | Accounting-policy call | 22 tax-shaped rules (P-003, P-130; S-009, S-078, S-085 to S-089, S-094, S-096 to S-098, S-080, S-081, S-103, S-104, S-105, S-107, S-109, S-120, S-123) | Retro-charge, chargeback, liquidation and A-to-Z tax goes to Other, Refund expenses or Sales › Other. The two sides also split the retro-charge tax differently | Applied (reviewer, 2026-10-28), all 22 to Sales › Tax. None of the 22 fires here, so the Summary is unchanged. Income tax and tax on fees stay where they are |
-| P3 | Accounting-policy call | P-075, P-116, P-117; S-082, S-106, S-108 | Chargeback and A-to-Z principal and shipping reversals go to Expenses › Other, while the same component on a refund goes to Refunded sales | Not applied (reviewer, 2026-10-28). Both sides agree, so there is no Variance, and the choice is presentation. The SQL is commented out in `MAPPING_FIXES.sql` |
-| P4 | Accounting-policy call | P-135, S-124; Summary line Sales › Micro Deposit (Failed) | A failed disbursement routes to nothing, and the line it belongs on has no field | Not applied (reviewer, 2026-10-28). S-124 may be a balance movement rather than a P&L item, and that is not decided. The line stays empty, and it is always zero in this settlement |
-| P5 | Accounting-policy call | P-107, S-026; Summary line Expenses › Shipping Charges | Return postage goes to Expenses › Other, and Shipping Charges has no field | Not applied (reviewer, 2026-10-28). Defensible either way, and both sides agree, so there is no Variance |
+| P1 | Accounting-policy call | P-073; S-067, S-068, S-069 | The ORDER FBA fee sits in Amazon fees, although the payments column is labelled "fulfilment by amazon fees" and the Summary has an FBA fees line | Applied (author's decision, 2026-10-28). Both sides move to Expenses › FBA fees. See the P1 effect below |
+| P2 | Accounting-policy call | 22 tax-shaped rules (P-003, P-130; S-009, S-078, S-085 to S-089, S-094, S-096 to S-098, S-080, S-081, S-103, S-104, S-105, S-107, S-109, S-120, S-123) | Retro-charge, chargeback, liquidation and A-to-Z tax goes to Other, Refund expenses or Sales › Other. The two sides also split the retro-charge tax differently | Applied (author's decision, 2026-10-28), all 22 to Sales › Tax. None of the 22 fires here, so the Summary is unchanged. Income tax and tax on fees stay where they are |
+| P3 | Accounting-policy call | P-075, P-116, P-117; S-082, S-106, S-108 | Chargeback and A-to-Z principal and shipping reversals go to Expenses › Other, while the same component on a refund goes to Refunded sales | Not applied (author's decision, 2026-10-28): a presentation choice with no effect on this settlement. Both sides agree, so there is no Variance, and no line fires either way. Left for the finance owner of the chart of accounts. The SQL is commented out in `MAPPING_FIXES.sql` |
+| P4 | Accounting-policy call | P-135, S-124; Summary line Sales › Micro Deposit (Failed) | A failed disbursement routes to nothing, and the line it belongs on has no field | Not applied (author's decision, 2026-10-28). S-124 may be a balance movement rather than a P&L item, so its routing is left for the finance owner of the chart of accounts. The line stays empty, and it is always zero in this settlement |
+| P5 | Accounting-policy call | P-107, S-026; Summary line Expenses › Shipping Charges | Return postage goes to Expenses › Other, and Shipping Charges has no field | Not applied (author's decision, 2026-10-28): a presentation choice with no effect on this settlement. Defensible either way, and both sides agree, so there is no Variance. Left for the finance owner of the chart of accounts |
 
 The remaining items needed no change:
 
@@ -561,7 +561,7 @@ The mapping history for this build holds 62 changes after the seed: 17 payments 
 
 ### Notes for the next reader
 
-- The Transfer's record_ref in the Consolidated sheet still carries the account's last digits, as pass A recorded. The reviewer has not decided that presentation question, so I left it as it was. It needs an answer before the workbook is shared.
+- The Transfer's record_ref in the Consolidated sheet still carries the account's last digits, as pass A recorded. The author has not decided that presentation question, so I left it as it was. It needs an answer before the workbook is shared.
 - The routing for O4 is a judgement: the payments "other" refund column and the settlement goodwill component are not the same economic item, so they route to different lines.
 - The after workbook was regenerated with `make after`. The Summary values above are read from the database, and they match the expected figures.
 
@@ -658,4 +658,4 @@ The SQL checks, all run on the after run: the Unreconciled payment records group
 
 ### Open items
 
-- The Transfer's `record_ref` in the Consolidated Data sheet carries the account's last three digits. The reviewer has not decided whether to mask it. It must be decided before the workbook goes with the submission email.
+- The Transfer's `record_ref` in the Consolidated Data sheet carries the account's last three digits. The author has not decided whether to mask it. It must be decided before the workbook goes with the submission email.

@@ -196,7 +196,7 @@ WHERE rule_id = 'S-079' AND transaction_type = 'SAFE-T_REIMBURSEMENT' AND amount
 --                  line on either side, and the Variance check cannot see them. Gift wrap and goodwill reduce the refund's
 --                  sale, so they go to Refunded sales, as the refund product sales do (P-009, S-013). Restocking and other
 --                  refund amounts are costs of the refund, so they go to Refund expenses, with the refund fees (P-011, P-018,
---                  S-016 to S-018). These are the recommended targets; a reviewer may choose other lines. The payments
+--                  S-016 to S-018). These are the recommended targets; another choice of lines is possible. The payments
 --                  "other" column does not name goodwill, so P-016 and S-006 are not a matched pair, and the split between
 --                  them is a judgement. None of the five rules has an in-scope line in this settlement.
 -- Variance closed: none. Refunds › Refunded sales -2,031.37 → -2,031.37 and Refunds › Refund expenses 258.87 → 258.87 (no lines).
@@ -335,10 +335,10 @@ WHERE rule_id = 'S-060' AND transaction_type = 'TRANSFERS' AND amount_type = 'MI
 -- Variance closed: none by itself. After the blocks above it leaves Sales › Product Charges -92.84, Shipping 93.20 and
 --                  Other -0.36, which net to 0.00 across the Sales lines. The accounting policy below closes them.
 
--- ===== Accounting-policy calls (separate; not objective fixes; each one needs a reviewer decision) =====
+-- ===== Accounting-policy calls (separate; not objective fixes; each one needs a decision by the author) =====
 
 -- Defect:          Sales tax and refund tax split across Summary lines the payments config cannot split
--- Kind:            accounting-policy call (applied; reviewer approved 2026-10-28)
+-- Kind:            accounting-policy call (applied; approved by the author, 2026-10-28)
 -- Recommendation:  Route every tax component to Sales › Tax (sales_tax, the sample's Tax line, which has no rule in the
 --                  baseline). This keeps the tax out of Product Charges, Shipping, Other and Refund expenses, where it
 --                  distorts the Sales and Refunds lines, and it matches the Summary's own Tax line.
@@ -445,10 +445,10 @@ WHERE rule_id = 'S-020' AND transaction_type = 'REFUND' AND amount_type = 'PROMO
   AND to_summary_field_when_positive_amount = 'refunded_expenses'
   AND to_summary_field_when_negative_amount = 'refunded_expenses';
 
--- ===== Accounting-policy calls, pass B (approved and not approved by the reviewer, 2026-10-28) =====
+-- ===== Accounting-policy calls, pass B (the author's decisions, 2026-10-28; some applied, some not) =====
 
 -- Defect:          FBA per-unit fulfilment fee routed to Amazon fees, while the Summary has an FBA fees line
--- Kind:            accounting-policy call (applied; reviewer decision 2026-10-28)
+-- Kind:            accounting-policy call (applied; author's decision 2026-10-28)
 -- Recommendation:  Route the ORDER FBA fee to Expenses › FBA fees on both sides, so the two sides agree. The payments
 --                  column is labelled "fulfilment by amazon fees", and the Summary has an FBA fees line for it. The same
 --                  column also carries the shipping and gift wrap chargebacks (-1,210.91), which the column cannot split
@@ -464,7 +464,7 @@ WHERE rule_id = 'S-020' AND transaction_type = 'REFUND' AND amount_type = 'PROMO
 -- Variance closed: Expenses › Amazon fees 0.00 → 0.00 (payments and settlements each -132,593.41 → -35,790.24);
 --                  Expenses › FBA fees 0.00 → 0.00 (payments and settlements each -0.41 → -96,803.58). The moved amount is
 --                  -96,803.17 on each side.
--- Applied:         yes (reviewer decision 2026-10-28)
+-- Applied:         yes (author's decision 2026-10-28)
 UPDATE payment_mapping_rules
 SET to_summary_field_when_positive_amount = 'expenses_fba_fees',
     to_summary_field_when_negative_amount = 'expenses_fba_fees'
@@ -480,7 +480,7 @@ WHERE rule_id IN ('S-067', 'S-068', 'S-069') AND transaction_type = 'ORDER' AND 
   AND to_summary_field_when_negative_amount = 'expenses_amazon_fees';
 
 -- Defect:          Sales tax on retro-charge, chargeback, liquidation and A-to-Z lines routed to Other, Refund expenses or Amazon fees
--- Kind:            accounting-policy call (applied; reviewer decision 2026-10-28)
+-- Kind:            accounting-policy call (applied; author's decision 2026-10-28)
 -- Recommendation:  Extend the sales-tax policy to the remaining tax-shaped rules, so that every sales tax and every refund
 --                  tax routes to Sales › Tax. Income tax (S-042) and tax on Amazon fees (S-045, S-100, S-117, S-129, S-131,
 --                  S-133, S-135, S-137) are not sales tax and stay where they are, with the fee.
@@ -499,7 +499,7 @@ WHERE rule_id IN ('S-067', 'S-068', 'S-069') AND transaction_type = 'ORDER' AND 
 --                  None of the 22 rules has an in-scope line in this settlement.
 -- Variance closed: none. Sales › Tax 13,436.38 → 13,436.38, and Sales › Other 11.61, Expenses › Other 0.00 and
 --                  Refunds › Refund expenses 258.87 are unchanged (no line fires any of the 22 rules).
--- Applied:         yes (reviewer decision 2026-10-28)
+-- Applied:         yes (author's decision 2026-10-28)
 UPDATE payment_mapping_rules
 SET to_summary_field_when_positive_amount = 'sales_tax',
     to_summary_field_when_negative_amount = 'sales_tax'
@@ -535,7 +535,7 @@ WHERE rule_id IN ('S-080', 'S-081', 'S-120')
 
 -- Defect:          Chargeback and A-to-Z principal and shipping reversals routed to Expenses › Other, while the same
 --                  component on a refund goes to Refunds › Refunded sales
--- Kind:            accounting-policy call (not applied; reviewer decision 2026-10-28)
+-- Kind:            accounting-policy call (not applied; author's decision 2026-10-28)
 -- Recommendation:  Route these reversals to Refunds › Refunded sales, as the refund product sales and shipping are routed
 --                  (P-009, P-010, S-010, S-013). The fees on chargebacks and A-to-Z claims (P-076, P-113, P-115, S-083,
 --                  S-084, S-110 to S-112) stay in Sales › Amazon fees.
@@ -545,7 +545,8 @@ WHERE rule_id IN ('S-080', 'S-081', 'S-120')
 -- Why:             Both sides agree (Expenses › Other), so there is no Variance. The choice is one of presentation.
 --                  Defensible either way; a reversal of a sale reads better in Refunds.
 -- Variance closed: none. Refunds › Refunded sales -2,031.37 → -2,031.37 and Expenses › Other 0.00 → 0.00 (no line fires).
--- Applied:         no (reviewer decision 2026-10-28)
+-- Applied:         no (author's decision, 2026-10-28). Not applied: a presentation choice with no effect on this settlement
+--                  (no lines fire, both sides agree either way). Left for the finance owner of the chart of accounts.
 -- UPDATE payment_mapping_rules
 -- SET to_summary_field_when_positive_amount = 'refunded_sales',
 --     to_summary_field_when_negative_amount = 'refunded_sales'
@@ -558,17 +559,18 @@ WHERE rule_id IN ('S-080', 'S-081', 'S-120')
 --   AND to_summary_field_when_negative_amount = 'expenses_other';
 
 -- Defect:          FAILED_DISBURSEMENT and failed bank transfer route to nothing; Sales › Micro Deposit (Failed) has no field
--- Kind:            accounting-policy call (not applied; reviewer decision 2026-10-28)
+-- Kind:            accounting-policy call (not applied; author's decision 2026-10-28)
 -- Recommendation:  Give the line the field sales_micro_deposit_failed (a summary_line_map row) and route P-135 and S-124
 --                  there. Not applied: S-124 is a bank transfer that failed, which may be a balance movement rather than
---                  a P&L item, and the reviewer did not take that call. Until it is decided the line stays empty.
+--                  a P&L item, so its routing is left for the finance owner of the chart of accounts. The line stays empty.
 -- Rule:            payments P-135 (ADJUSTMENT FAILED_DISBURSEMENT, total column); settlement S-124 (OTHER-TRANSACTION)
 -- Old value:       P-135 and S-124 blank on both signs; Summary line Sales › Micro Deposit (Failed) has no summary_field
 -- New value:       P-135 and S-124, both signs: sales_micro_deposit_failed; Sales › Micro Deposit (Failed) = 'sales_micro_deposit_failed'
 -- Why:             Both configs carry the failure and route nothing, so the line is always zero. The two sides agree at zero,
 --                  so there is no Variance to close. The routing choice only matters if a failed disbursement occurs.
 -- Variance closed: none. Sales › Micro Deposit (Failed) 0.00 → 0.00 (no lines).
--- Applied:         no (reviewer decision 2026-10-28)
+-- Applied:         no (author's decision, 2026-10-28). Not applied: the routing is left for the finance owner of the chart of accounts.
+--                  It has no effect on this settlement: no lines fire, and both sides are zero.
 -- UPDATE summary_line_map
 -- SET summary_field = 'sales_micro_deposit_failed'
 -- WHERE summary_group = 'Sales' AND summary_line = 'Micro Deposit (Failed)' AND summary_field IS NULL;
@@ -582,17 +584,18 @@ WHERE rule_id IN ('S-080', 'S-081', 'S-120')
 -- WHERE rule_id = 'S-124' AND to_summary_field_when_positive_amount = '' AND to_summary_field_when_negative_amount = '';
 
 -- Defect:          Return postage routed to Expenses › Other, while Expenses › Shipping Charges has no field
--- Kind:            accounting-policy call (not applied; reviewer decision 2026-10-28)
+-- Kind:            accounting-policy call (not applied; author's decision 2026-10-28)
 -- Recommendation:  Route return postage and return label purchases to Expenses › Shipping Charges (a summary_line_map row).
---                  Shipping chargebacks (S-069) stay in Expenses › Amazon fees, as P1 keeps them with the FBA fee. The
---                  reviewer did not take this call, so the postage stays in Expenses › Other.
+--                  Shipping chargebacks (S-069) stay with the FBA fee in Expenses › FBA fees, as P1 has them. The
+--                  call is left for the finance owner of the chart of accounts, so the postage stays in Expenses › Other.
 -- Rule:            payments P-107 (SHIPPING_SERVICES RETURNPOSTAGEBILLING, other); settlement S-026 (OTHER-TRANSACTION)
 -- Old value:       P-107 and S-026, both signs: expenses_other; Summary line Expenses › Shipping Charges has no summary_field
 -- New value:       P-107 and S-026, both signs: expenses_shipping_charges; Expenses › Shipping Charges = 'expenses_shipping_charges'
 -- Why:             Return postage is a shipping cost, so Shipping Charges is the line it belongs on. Defensible either way.
 --                  Both sides route it to the same line today, so there is no Variance.
 -- Variance closed: none. Expenses › Other 0.00 → 0.00 and Expenses › Shipping Charges 0.00 → 0.00 (no lines).
--- Applied:         no (reviewer decision 2026-10-28)
+-- Applied:         no (author's decision, 2026-10-28). Not applied: a presentation choice with no effect on this settlement
+--                  (no lines fire, both sides agree either way). Left for the finance owner of the chart of accounts.
 -- UPDATE summary_line_map
 -- SET summary_field = 'expenses_shipping_charges'
 -- WHERE summary_group = 'Expenses' AND summary_line = 'Shipping Charges' AND summary_field IS NULL;
