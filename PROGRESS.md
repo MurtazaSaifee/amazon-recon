@@ -404,3 +404,148 @@ Tax-shaped rules left unchanged for pass B (not part of the policy):
 - Did not fire in this settlement (no in-scope line): P-003, P-040 (COMMINGLING_VAT, already routes to sales_tax), P-077 (marketplace_withheld_tax, also no such column), P-130 (ORDER_RETROCHARGE sales_tax_collected), S-009, S-012 (REFUND GIFTWRAPTAX), S-075 (COMMINGLING_VAT, already routes to sales_tax), S-078, S-080, S-081, S-085, S-086, S-087, S-088, S-089, S-094, S-096, S-097, S-098, S-100, S-103, S-104, S-105, S-107, S-109, S-117, S-120 (REFUND ITEMWITHHELDTAX any), S-123, S-127 (ORDER LOWVALUEGOODSTAX-OTHER to sales_other), S-131, S-133, S-135, S-137, S-042 and S-045.
 
 Expected numbers, checked against the notes: every Summary Variance 0.00, Tax 13,436.38 on both sides, Shipping 8,294.16, Product Charges 335,336.96, Other 11.61, Refund expenses 258.87, Promo rebates -11,273.53, Amazon fees -132,593.41, Payments routing gap -133,756.51 on P-063. All as the notes predicted; nothing disagreed.
+
+## 2026-10-29: Ticket 08, Step 5 pass B: the meaning of every rule that fires
+
+Starting point: the pass A after build (`make after` on database `recon_t07`, run 1). Pass A closed every Variance, so the Summary balanced before this pass. Pass B asks a different question: does each rule that fired route its money to the right place? A Variance cannot show a wrong route when both sides make the same mistake, or when the money lands on a field with no Summary line. This pass checks those.
+
+The build for this pass is `make after` on database `recon_t08`, reading the real files from `INPUT_DIR` (nothing copied into the repo). It applies `MAPPING_FIXES.sql` in one transaction: 39 statements, every guard matched at least one row. Run 1, mode fixed, switch `prefix_before_catch_all`, config hash 05d22cbccce3, 0 malformed lines.
+
+### Inventory of the rules that fired
+
+Fifty rules contributed a non-zero amount: 19 payments rules and 31 settlement rules. Each line below is one Summary line, with the rules that fed it on each side. "Lines" counts the in-scope lines that contributed. The amounts are the routed sums, and they match on the two sides for every line.
+
+| Summary line (both sides) | Payments: rule, lines, amount | Settlements: rule, lines, amount |
+|---|---|---|
+| Sales › Product Charges, 335,336.96 | P-067: 13,328, 335,336.96 | S-064: 13,328, 335,336.96 |
+| Sales › Tax, 13,436.38 | P-006: 50, -196.62; P-014: 16, -42.59; P-071: 5,235, 13,675.59 | S-004: 13, -41.09; S-011: 11, -3.19; S-020: 8, 1.69; S-061: 1, 0.36; S-063: 2,013, 581.68; S-065: 5,235, 13,765.71; S-095: 2,506, -672.16; S-118: 3, -2.72; S-119: 50, -193.90 |
+| Sales › Shipping, 8,294.16 | P-068: 2,864, 8,294.16 | S-062: 2,864, 8,294.16 |
+| Sales › Inventory Reimbursements, 679.69 | P-028: 19, 298.96; P-034: 3, 42.47; P-036: 21, 338.26 | S-050: 21, 338.26; S-051: 19, 298.96; S-055: 3, 42.47 |
+| Sales › Other, 11.61 | P-070: 3, 11.61 | S-066: 3, 11.61 |
+| Refunds › Refunded sales, -2,031.37 | P-009: 69, -1,956.52; P-010: 25, -74.85 | S-010: 25, -74.85; S-013: 69, -1,956.52 |
+| Refunds › Refund expenses, 258.87 | P-011: 6, 28.89; P-017: 33, 112.62; P-018: 42, 117.36 | S-016: 6, 28.89; S-017: 42, 146.62; S-018: 42, -29.26; S-021: 19, 64.76; S-022: 19, 47.86 |
+| Expenses › Promo rebates, -11,273.53 | P-065: 3,983, -11,273.53 | S-072: 1,580, -4,098.30; S-073: 2,613, -7,175.23 |
+| Expenses › FBA fees, -96,803.58 | P-073: 13,328, -96,803.17; P-141: 1, -0.41 | S-067: 13,328, -95,592.26; S-068: 3, -11.97; S-069: 250, -1,198.94; S-128: 1, -0.37; S-129: 1, -0.04 |
+| Expenses › Amazon fees, -35,790.24 | P-064: 10,855, -35,773.27; P-100: 1, -16.97 | S-025: 1, -16.97; S-070: 10,855, -35,773.27 |
+
+The FBA fees and Amazon fees lines are the ones that changed in this pass (P1, below). Before P1 the same money sat on Amazon fees (-132,593.41) with -0.41 on FBA fees.
+
+Six of the fired FBA reimbursement and adjustment rules have only positive lines in this settlement (P-028, P-034, P-036, S-050, S-051, S-055), so their negative routes are not exercised here. I checked that from the contributions table.
+
+### Checks run
+
+| Check | Result |
+|---|---|
+| Fired contributions, read from the store: any amount routed to a field with no Summary line | None. 0 contributions reach an unmapped field |
+| Same component, payments and settlement, rule by rule, including rules that did not fire | Disagreements found, listed in the findings table below (O2, O3, O4, O5, O6, P2, P3, P4, P5) |
+| Sibling rules routing one component differently (for example Order against Refund) | O2 (tax siblings), O3 (SAFE-T), P2 (retro-charge tax split between Other and Sales) |
+| Sign-based routes: positive and negative of one component to different lines | 13 payments rules and 16 settlement rules send the two signs to different lines. They are the FBA reimbursement sign split, the house adjustment pattern (P-108, S-041) and the adjustments fixed in O5. Only the positive side fires for the FBA reimbursement rules here |
+| Tax routed to Product Charges or Shipping | None remain. Every rule that routes to Sales › Tax is a tax component (sales, shipping, gift wrap, VAT, withheld or commingling tax) |
+| Field routed to a line that contradicts its meaning | Tax on Amazon fees stays with the fee (S-045, S-100, S-117, S-129, S-131, S-133, S-135, S-137). Income tax (S-042) stays in Expenses › Other. Both are deliberate |
+| Summary fields with no Summary line, after the fixes | amazon_carried_forward (S-037), beginning_balance (S-033) and current_reserve_amount (S-031). These are balances, not income or expense. None fires |
+| Summary lines with no field, after the fixes | Five lines, justified below |
+| Payments columns the payments file does not have | P-013, P-074 and P-077 key on `marketplace_withheld_tax`. The header has no such column and the per-line residual is 0, so they are dead rules and harmless |
+| Column coverage, payments: column total against routed total | Equal for every column except `other` (the Transfer, -133,756.51, routed by P-063 to nothing by design) and `total` (not routed by design, to avoid double counting) |
+| Per-line residual, payments: total against the sum of its components | Residual 0 on every in-scope line |
+| Settlement: every line matched once; routed sum against the in-scope sum | Yes. 54,979 in-scope lines, 212,118.95 on both sides, difference 0.00 |
+| Duplicate rules (same type, description and field) | None. P-079 and P-081 differ only in the spelling of ENROLLMENT and route identically |
+| Blank routes on lines with money | P-031 (O1), P-004 (O2), P-013, P-074 and P-077 (absent field), and P-063 (the Transfer, by design) |
+
+### Findings, their class and their outcome
+
+The class follows the file's block format: a mapping defect is fixed with an UPDATE, an accounting-policy call goes to the reviewer. "Applied" means the statement is in `MAPPING_FIXES.sql` and ran in the after build. The reviewer's decisions were given on 2026-10-28.
+
+| ID | Class | Rules | Finding | Outcome |
+|---|---|---|---|---|
+| O1 | Mapping defect | P-031 | A negative fee correction has no route, because its negative side is blank | Applied: negative side to Expenses › Other. No lines here |
+| O2 | Mapping defect | P-004, S-012, S-127 | Refund and low-value-goods tax rules sit outside the tax route their siblings use | Applied: all three to Sales › Tax. No lines with a Variance |
+| O3 | Mapping defect | P-059, S-079 | SAFE-T reimbursement goes to FBA fees on payments and to Inventory Reimbursements on the settlement, with no sign split on either side | Applied: both sides to Inventory Reimbursements (positive) and Reversed Reimbursements (negative). No lines here |
+| O4 | Mapping defect | P-015, P-016, S-005, S-006, S-007 | Refund gift wrap, goodwill, restocking and other route to `total_refund_expense_or_sales_amt`, which has no Summary line | Applied: gift wrap and goodwill to Refunded sales; restocking and other to Refund expenses. These are the recommended targets. P-016 (payments "other") and S-006 (goodwill) are not a matched pair, so this is a judgement and not a reconciliation. No lines here |
+| O5 | Mapping defect | P-020, P-038, P-150, S-028, S-030, S-138 | Buyer recharge and other adjustments route to `total_adjustment_other_buyer_recharge_amt`, which has no Summary line | Applied: house pattern (positive to Sales › Other, negative to Expenses › Other); S-138 promotion adjustment to Promo rebates. No lines here |
+| O6 | Mapping defect | P-061, S-060, Summary line Expenses › Micro Deposit | Micro deposit round-off routes to `bank_account_transfer_round_off`, which has no Summary line, and the Summary line that should receive it has no field | Applied: the Summary-line map row Expenses › Micro Deposit gets the field `expenses_micro_deposit`, and both rules route there. The change is an UPDATE of the existing row (display order 200), so it is in `mapping_rule_history`. The CSV is unchanged |
+| P1 | Accounting-policy call | P-073; S-067, S-068, S-069 | The ORDER FBA fee sits in Amazon fees, although the payments column is labelled "fulfilment by amazon fees" and the Summary has an FBA fees line | Applied (reviewer, 2026-10-28). Both sides move to Expenses › FBA fees. See the P1 effect below |
+| P2 | Accounting-policy call | 22 tax-shaped rules (P-003, P-130; S-009, S-078, S-085 to S-089, S-094, S-096 to S-098, S-080, S-081, S-103, S-104, S-105, S-107, S-109, S-120, S-123) | Retro-charge, chargeback, liquidation and A-to-Z tax goes to Other, Refund expenses or Sales › Other. The two sides also split the retro-charge tax differently | Applied (reviewer, 2026-10-28), all 22 to Sales › Tax. None of the 22 fires here, so the Summary is unchanged. Income tax and tax on fees stay where they are |
+| P3 | Accounting-policy call | P-075, P-116, P-117; S-082, S-106, S-108 | Chargeback and A-to-Z principal and shipping reversals go to Expenses › Other, while the same component on a refund goes to Refunded sales | Not applied (reviewer, 2026-10-28). Both sides agree, so there is no Variance, and the choice is presentation. The SQL is commented out in `MAPPING_FIXES.sql` |
+| P4 | Accounting-policy call | P-135, S-124; Summary line Sales › Micro Deposit (Failed) | A failed disbursement routes to nothing, and the line it belongs on has no field | Not applied (reviewer, 2026-10-28). S-124 may be a balance movement rather than a P&L item, and that is not decided. The line stays empty, and it is always zero in this settlement |
+| P5 | Accounting-policy call | P-107, S-026; Summary line Expenses › Shipping Charges | Return postage goes to Expenses › Other, and Shipping Charges has no field | Not applied (reviewer, 2026-10-28). Defensible either way, and both sides agree, so there is no Variance |
+
+The remaining items needed no change:
+
+- N1: The balance fields (S-031, S-033, S-037) have no Summary line. Balances are not income or expense, and the Summary has no reserve line. They have no lines here.
+- N2: P-013, P-074 and P-077 key on a column that the payments file does not have. They are dead rules, and they have no effect.
+- N3: Refund-side fee and promotion reversals (P-011, P-017, P-018; S-016, S-017, S-018, S-021, S-022) route to Refund expenses on both sides. This is a presentation choice, and it is consistent. The Refund expenses total of 258.87 is the same on both sides.
+- N4: The FBA reimbursement sign split and the P-108 and S-041 adjustments are consistent between the two configs. No negative line fires them in this settlement.
+- N5: Tax on a fee follows the fee, as the payments FBA column already does.
+- N6: Totals and the catch-all are routed by design. The catch-all P-110 routes a line's total once, to Amazon fees. A line that matches no rule would land there, and this file has none.
+- N7: The ENROLLMENT and ENROLMENT spelling pair (P-079, P-081) routes identically.
+- N8: Settlement-only components with no payments column (S-071, S-074, S-042, S-138) would show a Variance if they fired. None fires here.
+- N9: The Summary lines without a field are justified in the next section.
+- N10: The Transfer (P-063, -133,756.51) is not summarised, by design, as pass A recorded.
+
+### P1: effect on the Summary
+
+P1 moves the ORDER FBA fee from Amazon fees to FBA fees, on both sides together:
+
+- Expenses › Amazon fees: -132,593.41 to -35,790.24 on both sides, Variance 0.00.
+- Expenses › FBA fees: -0.41 to -96,803.58 on both sides, Variance 0.00.
+- The moved amount is -96,803.17 on each side. The Expenses group total is -143,867.35 before and after, because the money moves within the group.
+
+### Summary lines still without a field
+
+Five Summary lines have no field, and each is deliberate:
+
+- Sales › Cross-account Debt Adjustment, and Expenses › Cross-account Debt Adjustment. No config field carries a cross-account debt. The debt rows (P-118 and S-032) route to Paid To Amazon by design, so these lines have nothing to receive. Zero lines on both sides.
+- Sales › FBA Fees. No config has a field for it. The FBA per-unit fee goes to Expenses › FBA fees under P1, so this line stays empty. Routing the fee to this line instead was the alternative to P1, and I did not choose it. Zero lines on both sides.
+- Sales › Micro Deposit (Failed). The P4 field was not applied, so the line is empty. The failed-disbursement rows route nothing on either side, so the line is zero. Zero lines on both sides.
+- Expenses › Shipping Charges. The P5 field was not applied, so return postage stays in Expenses › Other. Zero lines on both sides.
+
+Expenses › Micro Deposit had no field before this pass. O6 gives it `expenses_micro_deposit`.
+
+### The Summary after pass B
+
+The Summary sheet, every line, both columns. Variance is Payments minus Settlements. Only the two Expenses fee lines differ from pass A. Every other line is unchanged.
+
+| Summary line | Payments | Settlements | Variance |
+|---|---:|---:|---:|
+| Sales | 357,758.80 | 357,758.80 | 0.00 |
+| Sales › Product Charges | 335,336.96 | 335,336.96 | 0.00 |
+| Sales › Tax | 13,436.38 | 13,436.38 | 0.00 |
+| Sales › Shipping | 8,294.16 | 8,294.16 | 0.00 |
+| Sales › Amazon fees | 0.00 | 0.00 | 0.00 |
+| Sales › Inventory Reimbursements | 679.69 | 679.69 | 0.00 |
+| Sales › Cross-account Debt Adjustment | 0.00 | 0.00 | 0.00 |
+| Sales › Other | 11.61 | 11.61 | 0.00 |
+| Sales › FBA Fees | 0.00 | 0.00 | 0.00 |
+| Sales › Micro Deposit (Failed) | 0.00 | 0.00 | 0.00 |
+| Refunds | -1,772.50 | -1,772.50 | 0.00 |
+| Refunds › Refund expenses | 258.87 | 258.87 | 0.00 |
+| Refunds › Refunded sales | -2,031.37 | -2,031.37 | 0.00 |
+| Expenses | -143,867.35 | -143,867.35 | 0.00 |
+| Expenses › Promo rebates | -11,273.53 | -11,273.53 | 0.00 |
+| Expenses › FBA fees | -96,803.58 | -96,803.58 | 0.00 |
+| Expenses › Cost of Advertising | 0.00 | 0.00 | 0.00 |
+| Expenses › Shipping Charges | 0.00 | 0.00 | 0.00 |
+| Expenses › Amazon fees | -35,790.24 | -35,790.24 | 0.00 |
+| Expenses › Reversed Reimbursements | 0.00 | 0.00 | 0.00 |
+| Expenses › Cross-account Debt Adjustment | 0.00 | 0.00 | 0.00 |
+| Expenses › Other | 0.00 | 0.00 | 0.00 |
+| Expenses › Micro Deposit | 0.00 | 0.00 | 0.00 |
+| Paid To Amazon | 0.00 | 0.00 | 0.00 |
+| Summary fields with no Summary line | none | none | 0.00 |
+
+Every Variance is zero. The expected values all held: Amazon fees -35,790.24 on both sides, FBA fees -96,803.58 on both sides, and every other line as it was after pass A.
+
+Tie-outs, after:
+
+- Settlements: the Settlement total is 212,118.95 and the in-scope components sum to the same, difference 0.00. The Settlements unexplained difference is 0.00.
+- Payments: the Summary net is 212,118.95. The Transfer (-133,756.51, Unreconciled payment, P-063) is the only item outside the Summary, as in pass A, and the Payments unexplained difference is 0.00.
+
+Counts per status (record_refs): Reconciled 13,289; Reconciled with difference 0; Unreconciled payment 26; Unreconciled settlement 0; Unmapped 0 lines. The counts are the same as pass A, because the fixes move money between lines and do not change any record's total.
+
+The mapping history for this build holds 62 changes after the seed: 17 payments UPDATEs (5 from pass A, 12 from pass B), 2 DELETEs (pass A), 42 settlement UPDATEs (9 from pass A, 33 from pass B) and 1 Summary-line map UPDATE (O6). The statements are 39 in total, 16 from pass A and 23 from pass B. The 8 unapplied policy statements are commented out.
+
+### Notes for the next reader
+
+- The Transfer's record_ref in the Consolidated sheet still carries the account's last digits, as pass A recorded. The reviewer has not decided that presentation question, so I left it as it was. It needs an answer before the workbook is shared.
+- The routing for O4 is a judgement: the payments "other" refund column and the settlement goodwill component are not the same economic item, so they route to different lines.
+- The after workbook was regenerated with `make after`. The Summary values above are read from the database, and they match the expected figures.
