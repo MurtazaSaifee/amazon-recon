@@ -22,7 +22,8 @@ CREATE TABLE ingest_files (
     PRIMARY KEY (run_id, source)
 );
 
--- Lines that could not be read. A run with any of these fails before it replaces source rows.
+-- Lines that could not be read. An in-scope line, or one whose scope cannot be read, fails the run
+-- before it replaces source rows. An out-of-scope line is kept here and ingestion continues.
 CREATE TABLE ingest_errors (
     error_id    BIGSERIAL PRIMARY KEY,
     run_id      BIGINT NOT NULL REFERENCES ingest_runs (run_id) ON DELETE CASCADE,
