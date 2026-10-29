@@ -212,4 +212,8 @@ Identifiers from the real files are redacted in this repository's history: the s
 
 ## How it was built
 
-A written design, then a sequence of small tickets, each implemented test-first by AI coding agents working in separate git worktrees. An orchestrating reviewer coordinated the work. The changes were reviewed on two axes: whether they follow the repository's standards, and whether they do what their ticket asked. Every reported number was checked with SQL against the source rows, and no LLM is in the money path.
+- Built with Claude Code, agentic and test-first. An Opus session acted as orchestrator and reviewer: exploration, design, tickets, review, and the read-only SQL tracing of every Variance.
+- Haiku subagents implemented every ticket test-first, each in its own git worktree, and a merger agent integrated them.
+- A two-axis code review (repository standards; does the code do what the ticket asked) was followed by one fix pass.
+- The author made every accounting-policy decision. Each was presented with its evidence and its exact effect per Summary line before anything was applied.
+- No LLM is in the money path: the pipeline is deterministic Go and SQL, and every reported number was verified by SQL against source rows.
