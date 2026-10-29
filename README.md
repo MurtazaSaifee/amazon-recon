@@ -179,7 +179,7 @@ Run them with `make test`, or `RECON_DATABASE_URL=… go test ./...`.
 
 ## Not in this repository, and why
 
-The two reports, the two mapping configs, the generated workbooks and the PostgreSQL dump contain seller data (buyer locations, order IDs, product details). The repository is public, so they go with the submission email instead. `.gitignore` excludes them.
+The two reports contain seller data (buyer locations, order IDs), and so do the generated workbooks and the PostgreSQL dump. The mapping configs and the sample workbook are PortOne's files, and they are not redistributed. All of them go with the submission email instead, and `.gitignore` excludes them.
 
 Identifiers from the real files are redacted in this repository's history: the settlement ID appears as 90000000001 and the bank account's last digits as 999. The workbooks and dump sent with the email carry the real values.
 
