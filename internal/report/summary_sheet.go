@@ -18,54 +18,85 @@ const summaryNote = "Source signs are kept: expenses and refunds are negative, a
 	"Payments are Transaction lines only and Settlements are Components only. " +
 	"The last column is Payments minus Settlements."
 
-// writeSummary writes the Summary sheet. Subtotal and difference cells are formulas whose
+// The row layout of the Summary block, taken from the sample workbook. The column headers are in row 1.
+// The first group starts two blank rows below them. Each later group starts one blank row below the
+// previous group's last row, or three blank rows below it when the group is a single line named as the
+// group (Paid To Amazon). The rest of the sheet starts two blank rows below the block.
+const (
+	summaryHeaderRow           = 1
+	blankRowsAfterHeader       = 2
+	blankRowsBetweenGroups     = 1
+	blankRowsBeforeSingleGroup = 3
+	blankRowsBeforeRest        = 2
+)
+
+// writeSummary writes the Summary sheet: the column headers and the Summary block from row 1, then the
+// run header and the rest of the sheet below the block. Subtotal and difference cells are formulas whose
 // stored values are the same numbers the formulas produce.
-func writeSummary(f *excelize.File, r recon.Report, bold, money int) error {
+func writeSummary(f *excelize.File, r recon.Report, st styles) error {
 	w := &sheetWriter{f: f, sheet: SummarySheet}
-	w.text(1, "B", "Amazon Payments vs Settlement: Summary", bold)
-	row := writeRunHeader(w, r, 3) + 1
+	w.text(summaryHeaderRow, "C", "Payments", st.bold)
+	w.text(summaryHeaderRow, "D", "Settlements", st.bold)
+	w.text(summaryHeaderRow, "E", "Payments - Settlements", st.bold)
+	row := writeSummaryBlock(w, r.Summary.Lines, st) + 1 + blankRowsBeforeRest
+
+	w.text(row, "B", "Amazon Payments vs Settlement: Summary", st.bold)
+	row = writeRunHeader(w, r, row+2) + 1
 	w.text(row, "B", summaryNote, 0)
-	row += 2
-
-	w.text(row, "B", "Summary", bold)
-	w.text(row, "C", "Payments", bold)
-	w.text(row, "D", "Settlements", bold)
-	w.text(row, "E", "Payments minus Settlements", bold)
-	row++
-
-	for _, g := range groupLines(r.Summary.Lines) {
-		if len(g.lines) == 1 && g.lines[0].Line == g.name {
-			// A group with one line of the same name (Paid To Amazon) is that line.
-			writeLineRow(w, row, g.name, g.lines[0].Payments, g.lines[0].Settlements, money, bold)
-			row += 2
-			continue
-		}
-		groupRow := row
-		first := row + 1
-		payments, settlements := decimal.Zero, decimal.Zero
-		for i, l := range g.lines {
-			writeLineRow(w, first+i, "  "+l.Line, l.Payments, l.Settlements, money, 0)
-			payments = payments.Add(l.Payments)
-			settlements = settlements.Add(l.Settlements)
-		}
-		last := first + len(g.lines) - 1
-		w.text(groupRow, "B", g.name, bold)
-		w.formula(groupRow, "C", fmt.Sprintf("SUM(C%d:C%d)", first, last), payments, money)
-		w.formula(groupRow, "D", fmt.Sprintf("SUM(D%d:D%d)", first, last), settlements, money)
-		w.formula(groupRow, "E", fmt.Sprintf("C%d-D%d", groupRow, groupRow), payments.Sub(settlements), money)
-		row = last + 2
-	}
-
-	row = writeUnmapped(w, row, r.Summary.Unmapped, money, bold)
-	row = writeTieOut(w, row+1, r, money, bold)
-	writeStatusCounts(w, row+1, r.Reconciliation, bold)
+	row = writeUnmapped(w, row+2, r.Summary.Unmapped, st.money, st.bold)
+	row = writeTieOut(w, row+1, r, st.money, st.bold)
+	writeStatusCounts(w, row+1, r.Reconciliation, st.bold)
 	return w.err
+}
+
+// writeSummaryBlock writes the Summary groups in display order, starting from the first group row, and
+// returns the last row it uses. It spaces the groups by the rule above.
+func writeSummaryBlock(w *sheetWriter, lines []recon.SummaryLine, st styles) int {
+	last := summaryHeaderRow
+	for i, g := range groupLines(lines) {
+		blank := blankRowsBetweenGroups
+		switch {
+		case i == 0:
+			blank = blankRowsAfterHeader
+		case g.isSingleLine():
+			blank = blankRowsBeforeSingleGroup
+		}
+		last = writeGroup(w, last+1+blank, g, st)
+	}
+	return last
+}
+
+// writeGroup writes one group whose first row is row, and returns its last row. A single line named as
+// its group is one labelled row. Any other group has its subtotal on its first row, with its lines below.
+func writeGroup(w *sheetWriter, row int, g lineGroup, st styles) int {
+	if g.isSingleLine() {
+		writeLineRow(w, row, g.name, g.lines[0].Payments, g.lines[0].Settlements, st.money, st.indent)
+		return row
+	}
+	first := row + 1
+	payments, settlements := decimal.Zero, decimal.Zero
+	for i, l := range g.lines {
+		writeLineRow(w, first+i, l.Line, l.Payments, l.Settlements, st.money, st.indent)
+		payments = payments.Add(l.Payments)
+		settlements = settlements.Add(l.Settlements)
+	}
+	last := first + len(g.lines) - 1
+	w.text(row, "B", g.name, st.bold)
+	w.formula(row, "C", fmt.Sprintf("SUM(C%d:C%d)", first, last), payments, st.money)
+	w.formula(row, "D", fmt.Sprintf("SUM(D%d:D%d)", first, last), settlements, st.money)
+	w.formula(row, "E", fmt.Sprintf("C%d-D%d", row, row), payments.Sub(settlements), st.money)
+	return last
 }
 
 // lineGroup is one Summary group and its lines, in display order.
 type lineGroup struct {
 	name  string
 	lines []recon.SummaryLine
+}
+
+// isSingleLine reports whether the group is one line named as the group, such as Paid To Amazon.
+func (g lineGroup) isSingleLine() bool {
+	return len(g.lines) == 1 && g.lines[0].Line == g.name
 }
 
 // groupLines keeps the groups in the order their first line appears.

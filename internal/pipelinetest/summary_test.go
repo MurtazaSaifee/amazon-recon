@@ -197,6 +197,72 @@ func TestWorkbookSheetsAreSummaryConsolidatedAuditAndOutOfScope(t *testing.T) {
 	}
 }
 
+// sampleSummaryLabels is column B of the Summary sheet in the sample workbook, rows 1 to 32. An empty
+// string is a blank row. Row 1 holds the column headers in C:E, so its B cell is blank too. The labels
+// are written out from the sample, not read from configs/summary_line_map.csv, so the test checks the
+// layout itself.
+var sampleSummaryLabels = []string{
+	"", "", "", // rows 1 to 3: the headers, then two blank rows
+	"Sales", "Product Charges", "Tax", "Shipping", "Amazon fees", "Inventory Reimbursements",
+	"Cross-account Debt Adjustment", "Other", "FBA Fees", "Micro Deposit (Failed)",
+	"",
+	"Refunds", "Refund expenses", "Refunded sales",
+	"",
+	"Expenses", "Promo rebates", "FBA fees", "Cost of Advertising", "Shipping Charges",
+	"Amazon fees", "Reversed Reimbursements", "Cross-account Debt Adjustment", "Other", "Micro Deposit",
+	"", "", "", // three blank rows before a single-line group named as its line
+	"Paid To Amazon",
+}
+
+// The Summary sheet's first 32 rows match the sample workbook: the column headers in row 1, the
+// groups from row 4, and the rest of the sheet from row 35, below two blank rows.
+func TestSummarySheetLayoutMatchesSample(t *testing.T) {
+	ctx := context.Background()
+	pool := newPipelineDB(t)
+	res := ingestFixtures(t, pool)
+	rep, err := recon.Build(ctx, pool, res.RunID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	f := writeReport(t, rep)
+	const sheet = report.SummarySheet
+	cellText := func(cell string) string {
+		t.Helper()
+		v, err := f.GetCellValue(sheet, cell)
+		if err != nil {
+			t.Fatalf("read %s: %v", cell, err)
+		}
+		return v
+	}
+
+	for cell, want := range map[string]string{"B1": "", "C1": "Payments", "D1": "Settlements", "E1": "Payments - Settlements"} {
+		if got := cellText(cell); got != want {
+			t.Errorf("%s = %q, want %q", cell, got, want)
+		}
+	}
+	for i, want := range sampleSummaryLabels {
+		row := i + 1
+		if got := cellText(fmt.Sprintf("B%d", row)); got != want {
+			t.Errorf("B%d = %q, want %q", row, got, want)
+		}
+		if want == "" && row > 1 {
+			for _, col := range []string{"C", "D", "E"} {
+				if got := cellText(fmt.Sprintf("%s%d", col, row)); got != "" {
+					t.Errorf("%s%d = %q, want a blank row", col, row, got)
+				}
+			}
+		}
+	}
+	for _, cell := range []string{"B33", "B34"} {
+		if got := cellText(cell); got != "" {
+			t.Errorf("%s = %q, want a blank row before the rest of the sheet", cell, got)
+		}
+	}
+	if got := cellText("B35"); got != "Amazon Payments vs Settlement: Summary" {
+		t.Errorf("B35 = %q, want the sheet title", got)
+	}
+}
+
 // The Summary sheet: groups with formula subtotals that also keep their values,
 // a variance column, the unmapped block, the tie-out, and the sign note.
 func TestSummarySheetFormulasKeepValues(t *testing.T) {
@@ -219,7 +285,7 @@ func TestSummarySheetFormulasKeepValues(t *testing.T) {
 
 	const sheet = "Summary"
 	signNote := false
-	for row := 1; row <= 80; row++ {
+	for row := 1; row <= 200; row++ {
 		if v, _ := f.GetCellValue(sheet, fmt.Sprintf("B%d", row)); strings.Contains(v, "signs are kept") {
 			signNote = true
 		}

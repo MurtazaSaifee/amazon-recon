@@ -28,7 +28,7 @@ func WriteWorkbook(path string, r recon.Report) error {
 	if err != nil {
 		return fmt.Errorf("create the cell styles: %w", err)
 	}
-	if err := writeSummary(f, r, styles.bold, styles.money); err != nil {
+	if err := writeSummary(f, r, styles); err != nil {
 		return fmt.Errorf("write the Summary sheet: %w", err)
 	}
 	if err := writeConsolidated(f, r, styles.bold, styles.money); err != nil {
@@ -58,6 +58,8 @@ func WriteWorkbook(path string, r recon.Report) error {
 type styles struct {
 	bold  int
 	money int
+	// indent sets a Summary line label apart from its group: left aligned, indented as in the sample.
+	indent int
 }
 
 func newStyles(f *excelize.File) (styles, error) {
@@ -69,5 +71,9 @@ func newStyles(f *excelize.File) (styles, error) {
 	if err != nil {
 		return styles{}, err
 	}
-	return styles{bold: bold, money: money}, nil
+	indent, err := f.NewStyle(&excelize.Style{Alignment: &excelize.Alignment{Horizontal: "left", Indent: 4}})
+	if err != nil {
+		return styles{}, err
+	}
+	return styles{bold: bold, money: money, indent: indent}, nil
 }

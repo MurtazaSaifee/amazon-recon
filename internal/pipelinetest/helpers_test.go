@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -96,7 +95,7 @@ func checkFormulaCell(t *testing.T, f *excelize.File, sheet, label, col, want st
 	}
 }
 
-// findLabel returns the row whose column B holds label, and fails the test if no row does.
+// findLabel returns the row whose column B holds label exactly, and fails the test if no row does.
 func findLabel(t *testing.T, f *excelize.File, sheet, label string) int {
 	t.Helper()
 	for row := 1; row <= 200; row++ {
@@ -104,7 +103,7 @@ func findLabel(t *testing.T, f *excelize.File, sheet, label string) int {
 		if err != nil {
 			t.Fatalf("read B%d: %v", row, err)
 		}
-		if strings.TrimSpace(v) == label {
+		if v == label {
 			return row
 		}
 	}
