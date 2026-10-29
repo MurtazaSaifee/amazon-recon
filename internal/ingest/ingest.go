@@ -19,17 +19,20 @@ import (
 	"amazonrecon/internal/store"
 )
 
-// Run modes, recorded on each run. Baseline turns the interpretation switches off.
+// Mode is the run mode, recorded on each run. Baseline turns the interpretation switches off.
+type Mode string
+
+// The two run modes.
 const (
-	ModeFixed    = "fixed"
-	ModeBaseline = "baseline"
+	ModeFixed    Mode = "fixed"
+	ModeBaseline Mode = "baseline"
 )
 
 // Inputs names the two report files and the mode the run is recorded with.
 type Inputs struct {
 	PaymentsPath   string
 	SettlementPath string
-	Mode           string // ModeFixed or ModeBaseline; empty means ModeFixed
+	Mode           Mode // ModeFixed or ModeBaseline; empty means ModeFixed
 }
 
 // Result is what a successful ingest run produced.
@@ -40,7 +43,7 @@ type Result struct {
 	SettlementLines int    // settlement lines stored, header included
 	Malformed       int    // malformed lines of both reports, all stored in ingest_errors
 	ConfigHash      string // SHA-256 of the mapping configs the run used
-	Mode            string
+	Mode            Mode
 }
 
 // Run ingests both reports as one run. It replaces the stored lines of both
@@ -75,20 +78,20 @@ func Run(ctx context.Context, pool *pgxpool.Pool, in Inputs) (Result, error) {
 func run(ctx context.Context, pool *pgxpool.Pool, runID int64, in Inputs) (Result, error) {
 	payDigest, err := digestFile(in.PaymentsPath)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("digest payments file: %w", err)
 	}
 	setDigest, err := digestFile(in.SettlementPath)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("digest settlement file: %w", err)
 	}
 
 	settle, err := readSettlement(in.SettlementPath)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("read settlement report: %w", err)
 	}
 	pay, err := readPayments(in.PaymentsPath)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("read payments report: %w", err)
 	}
 
 	headerID := settle.Header.SettlementID
@@ -114,14 +117,14 @@ func run(ctx context.Context, pool *pgxpool.Pool, runID int64, in Inputs) (Resul
 	// The rules are read inside the transaction, so every line is mapped with the configs the run stored.
 	payRules, setRules, err := store.LoadRules(ctx, tx)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("load mapping rules: %w", err)
 	}
 	configHash, err := store.ConfigHash(ctx, tx)
 	if err != nil {
-		return Result{}, err
+		return Result{}, fmt.Errorf("hash mapping configs: %w", err)
 	}
 	switches := mapping.SwitchesFor(in.Mode == ModeBaseline)
-	if err := store.SetRunConfig(ctx, tx, runID, configHash, in.Mode, switches.Names()); err != nil {
+	if err := store.SetRunConfig(ctx, tx, runID, configHash, string(in.Mode), switches.Names()); err != nil {
 		return Result{}, fmt.Errorf("record run config: %w", err)
 	}
 	mapper := mapping.NewMapper(payRules, setRules, switches)
@@ -189,22 +192,10 @@ func firstInScope(lines []store.MalformedLine) store.MalformedLine {
 // scopedRow decides a line's scope. Scope is the Settlement ID from the
 // Settlement report header, plus status Released for payments lines.
 func scopedRow(fileName string, l source.Line, headerID string) store.SourceRow {
-	r := store.SourceRow{FileName: fileName, Line: l}
-	switch {
-	case l.Kind == source.KindSettlementHeader:
-		r.ScopeReason = "Settlement header (reference total)"
-	case l.SettlementID != headerID:
-		r.ScopeReason = "Other settlement"
-	case l.Source == source.Settlement:
-		r.InScope, r.ScopeReason = true, "Settlement component"
-	case l.Status == "Released":
-		r.InScope, r.ScopeReason = true, "Released"
-	case l.Status == "Deferred":
-		r.ScopeReason = "Deferred"
-	default:
-		r.ScopeReason = "Status " + l.Status
-	}
-	return r
+	in, reason, _ := source.Scope(headerID, source.ScopeCells{
+		Source: l.Source, Kind: l.Kind, SettlementID: l.SettlementID, Status: l.Status,
+	})
+	return store.SourceRow{FileName: fileName, Line: l, InScope: in, ScopeReason: reason}
 }
 
 func readPayments(path string) (source.PaymentsReport, error) {

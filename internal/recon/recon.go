@@ -9,7 +9,18 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
+
+	"amazonrecon/internal/source"
+	"amazonrecon/internal/store"
 )
+
+// shortHash is the first 12 characters of a config hash, enough to name it in a message.
+func shortHash(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
+}
 
 // Total is a count of lines and the sum of their amounts.
 type Total struct {
@@ -29,16 +40,6 @@ type SettlementHeader struct {
 	LineNumber  int
 }
 
-// FileRecord is the ingest record of one report file.
-type FileRecord struct {
-	Source         string
-	FileName       string
-	SHA256         string
-	PhysicalLines  int
-	StoredLines    int
-	MalformedLines int
-}
-
 // Report is the data behind the tie-out. It holds numbers only; the workbook writer formats them.
 type Report struct {
 	RunID          int64
@@ -49,16 +50,18 @@ type Report struct {
 	Switches       []string // enabled interpretation switches, sorted; empty for a baseline run
 	MalformedLines int      // malformed lines of both reports, all stored in ingest_errors
 	Settlement     SettlementHeader
-	Files          []FileRecord
+	Files          []store.FileRecord
 
-	Components                Total // in-scope Settlement components
-	TransactionsInScope       Total // in-scope payments lines, Transfer included
-	Transfers                 Total // in-scope Transfer lines
-	ReleasedExcludingTransfer Total // in-scope payments lines, Transfer excluded
-	Deferred                  Total // memo: Deferred lines of this Settlement, out of scope
+	Components          Total // in-scope Settlement components
+	TransactionsInScope Total // in-scope payments lines (Released), Unreconciled ones included
+	Deferred            Total // memo: Deferred lines of this Settlement, out of scope
 
-	ComponentsMinusTotal        decimal.Decimal // should be zero
-	ExcludingTransferMinusTotal decimal.Decimal // should be zero
+	// ReleasedExcludingUnreconciled is TransactionsInScope minus the payments lines of Unreconciled
+	// payment records, so it is the part of the payments total that a record accounts for.
+	ReleasedExcludingUnreconciled decimal.Decimal
+
+	ComponentsMinusTotal                    decimal.Decimal // should be zero
+	ReleasedExcludingUnreconciledMinusTotal decimal.Decimal // should be zero
 
 	Summary        Summary
 	TieOut         TieOut
@@ -70,22 +73,31 @@ type Report struct {
 func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error) {
 	rep := Report{RunID: runID}
 
+	// The run register is read once: the status, the times, and the config, mode and switches the run used.
 	var status string
-	if err := pool.QueryRow(ctx,
-		"SELECT status, started_at, COALESCE(finished_at, started_at) FROM ingest_runs WHERE run_id = $1",
-		runID).Scan(&status, &rep.StartedAt, &rep.FinishedAt); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT status, started_at, COALESCE(finished_at, started_at),
+			COALESCE(config_hash, ''), mode, switches
+		FROM ingest_runs WHERE run_id = $1`, runID).Scan(
+		&status, &rep.StartedAt, &rep.FinishedAt, &rep.ConfigHash, &rep.Mode, &rep.Switches); err != nil {
 		return Report{}, fmt.Errorf("run %d: %w", runID, err)
 	}
 	if status != "complete" {
 		return Report{}, fmt.Errorf("run %d is %s, not complete", runID, status)
 	}
-	if err := pool.QueryRow(ctx, "SELECT COALESCE(config_hash, ''), mode, switches FROM ingest_runs WHERE run_id = $1",
-		runID).Scan(&rep.ConfigHash, &rep.Mode, &rep.Switches); err != nil {
-		return Report{}, fmt.Errorf("config of run %d: %w", runID, err)
+	// A report must describe the config its run used. If the mapping configs changed after the run,
+	// the numbers would describe a config that no run produced, so the report refuses.
+	current, err := store.ConfigHash(ctx, pool)
+	if err != nil {
+		return Report{}, fmt.Errorf("current config hash: %w", err)
+	}
+	if current != rep.ConfigHash {
+		return Report{}, fmt.Errorf("run %d was ingested with config hash %s, but the mapping configs now hash to %s: "+
+			"the configs changed after the run; re-run ingest before reporting",
+			runID, shortHash(rep.ConfigHash), shortHash(current))
 	}
 
-	var totalText string
-	if err := pool.QueryRow(ctx, `SELECT settlement_id, amount::text, currency, period_start, period_end,
+	var totalText store.Amount
+	if err := pool.QueryRow(ctx, `SELECT settlement_id, amount, currency, period_start, period_end,
 			deposit_date, file_name, line_number
 		FROM source_rows WHERE run_id = $1 AND line_kind = 'settlement_header'`, runID).Scan(
 		&rep.Settlement.ID, &totalText, &rep.Settlement.Currency, &rep.Settlement.PeriodStart,
@@ -93,10 +105,7 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 	); err != nil {
 		return Report{}, fmt.Errorf("settlement header of run %d: %w", runID, err)
 	}
-	total, err := decimal.NewFromString(totalText)
-	if err != nil {
-		return Report{}, err
-	}
+	total := totalText.Decimal
 	rep.Settlement.Total = total
 
 	rows, err := pool.Query(ctx, `SELECT source, file_name, sha256, physical_lines, stored_lines, malformed_lines
@@ -105,7 +114,7 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 		return Report{}, err
 	}
 	for rows.Next() {
-		var f FileRecord
+		var f store.FileRecord
 		if err := rows.Scan(&f.Source, &f.FileName, &f.SHA256, &f.PhysicalLines, &f.StoredLines, &f.MalformedLines); err != nil {
 			rows.Close()
 			return Report{}, err
@@ -118,45 +127,32 @@ func Build(ctx context.Context, pool *pgxpool.Pool, runID int64) (Report, error)
 		return Report{}, err
 	}
 
-	var comp, pay, xfer, def Total
-	var compAmt, payAmt, xferAmt, defAmt string
+	var comp, pay, def Total
+	var compAmt, payAmt, defAmt store.Amount
 	if err := pool.QueryRow(ctx, `SELECT
-			count(*) FILTER (WHERE source = 'settlement' AND line_kind = 'component' AND in_scope),
-			COALESCE(sum(amount) FILTER (WHERE source = 'settlement' AND line_kind = 'component' AND in_scope), 0)::text,
-			count(*) FILTER (WHERE source = 'payments' AND in_scope),
-			COALESCE(sum(amount) FILTER (WHERE source = 'payments' AND in_scope), 0)::text,
-			count(*) FILTER (WHERE source = 'payments' AND in_scope AND txn_type = 'Transfer'),
-			COALESCE(sum(amount) FILTER (WHERE source = 'payments' AND in_scope AND txn_type = 'Transfer'), 0)::text,
-			count(*) FILTER (WHERE source = 'payments' AND scope_reason = 'Deferred'),
-			COALESCE(sum(amount) FILTER (WHERE source = 'payments' AND scope_reason = 'Deferred'), 0)::text
+			count(*) FILTER (WHERE source = '`+source.Settlement+`' AND line_kind = '`+source.KindComponent+`' AND in_scope),
+			COALESCE(sum(amount) FILTER (WHERE source = '`+source.Settlement+`' AND line_kind = '`+source.KindComponent+`' AND in_scope), 0),
+			count(*) FILTER (WHERE source = '`+source.Payments+`' AND in_scope),
+			COALESCE(sum(amount) FILTER (WHERE source = '`+source.Payments+`' AND in_scope), 0),
+			count(*) FILTER (WHERE source = '`+source.Payments+`' AND scope_reason = '`+source.ReasonDeferred+`'),
+			COALESCE(sum(amount) FILTER (WHERE source = '`+source.Payments+`' AND scope_reason = '`+source.ReasonDeferred+`'), 0)
 		FROM source_rows WHERE run_id = $1`, runID).Scan(
-		&comp.Count, &compAmt, &pay.Count, &payAmt, &xfer.Count, &xferAmt, &def.Count, &defAmt,
+		&comp.Count, &compAmt, &pay.Count, &payAmt, &def.Count, &defAmt,
 	); err != nil {
 		return Report{}, fmt.Errorf("totals of run %d: %w", runID, err)
 	}
-	for _, p := range []struct {
-		t *Total
-		s string
-	}{{&comp, compAmt}, {&pay, payAmt}, {&xfer, xferAmt}, {&def, defAmt}} {
-		if p.t.Amount, err = decimal.NewFromString(p.s); err != nil {
-			return Report{}, err
-		}
-	}
+	comp.Amount, pay.Amount, def.Amount = compAmt.Decimal, payAmt.Decimal, defAmt.Decimal
 
 	rep.Components = comp
 	rep.TransactionsInScope = pay
-	rep.Transfers = xfer
 	rep.Deferred = def
-	rep.ReleasedExcludingTransfer = Total{
-		Count:  pay.Count - xfer.Count,
-		Amount: pay.Amount.Sub(xfer.Amount),
-	}
 	rep.ComponentsMinusTotal = comp.Amount.Sub(total)
-	rep.ExcludingTransferMinusTotal = rep.ReleasedExcludingTransfer.Amount.Sub(total)
 
 	if err := buildSummary(ctx, pool, runID, &rep); err != nil {
 		return Report{}, err
 	}
+	rep.ReleasedExcludingUnreconciled = pay.Amount.Sub(rep.TieOut.Payments.Unreconciled.Amount)
+	rep.ReleasedExcludingUnreconciledMinusTotal = rep.ReleasedExcludingUnreconciled.Sub(total)
 	if err := buildReconciliation(ctx, pool, runID, &rep); err != nil {
 		return Report{}, err
 	}

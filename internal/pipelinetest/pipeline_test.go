@@ -15,7 +15,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/shopspring/decimal"
 	"github.com/xuri/excelize/v2"
 
 	"amazonrecon/internal/ingest"
@@ -37,10 +36,7 @@ const (
 	setHeader                    = 2
 )
 
-const (
-	settlementID = "12000000001"
-	tieOutSheet  = "Tie-out"
-)
+const settlementID = "12000000001"
 
 func TestPipelineTracerBullet(t *testing.T) {
 	ctx := context.Background()
@@ -71,17 +67,16 @@ func TestPipelineTracerBullet(t *testing.T) {
 		assertDec(t, "components minus settlement total", rep.ComponentsMinusTotal, "0.00")
 	})
 
-	t.Run("released payments excluding the transfer tie to the total", func(t *testing.T) {
-		if rep.ReleasedExcludingTransfer.Count != 4 {
-			t.Errorf("released lines excluding transfer = %d, want 4", rep.ReleasedExcludingTransfer.Count)
-		}
-		assertDec(t, "released excluding transfer", rep.ReleasedExcludingTransfer.Amount, "1249.56")
-		assertDec(t, "released excluding transfer minus settlement total", rep.ExcludingTransferMinusTotal, "0.00")
+	t.Run("released payments excluding the unreconciled payments leave only the unmapped refund component", func(t *testing.T) {
+		// The refund (-10.00) is an Unreconciled payment because its settlement component is unmapped,
+		// so the Settlement total still holds that -10.00 and the payments side is 10.00 above it.
+		assertDec(t, "released excluding unreconciled payments", rep.ReleasedExcludingUnreconciled, "1259.56")
+		assertDec(t, "released excluding unreconciled payments minus settlement total", rep.ReleasedExcludingUnreconciledMinusTotal, "10.00")
 	})
 
-	t.Run("transfer is in scope and shown on its own", func(t *testing.T) {
-		assertDec(t, "transfer", rep.Transfers.Amount, "-1000.00")
-		assertDec(t, "in-scope transaction lines incl. transfer", rep.TransactionsInScope.Amount, "249.56")
+	t.Run("the Transfer is an unreconciled payment, shown on its own", func(t *testing.T) {
+		assertDec(t, "unreconciled payments", rep.TieOut.Payments.Unreconciled.Amount, "-1010.00")
+		assertDec(t, "in-scope transaction lines", rep.TransactionsInScope.Amount, "249.56")
 		assertLine(t, ctx, pool, res.RunID, "payments", pmtTransfer, func(l store.Line) {
 			if !l.InScope {
 				t.Errorf("transfer line out of scope: %s", l.ScopeReason)
@@ -117,7 +112,7 @@ func TestPipelineTracerBullet(t *testing.T) {
 	t.Run("file names, hashes and line counts are recorded", func(t *testing.T) {
 		wantPayments := fileSHA256(t, filepath.Join(fixtures, "synthetic_payments.csv"))
 		wantSettlement := fileSHA256(t, filepath.Join(fixtures, "synthetic_settlement.txt"))
-		got := map[string]recon.FileRecord{}
+		got := map[string]store.FileRecord{}
 		for _, f := range rep.Files {
 			got[f.Source] = f
 		}
@@ -149,16 +144,17 @@ func TestPipelineTracerBullet(t *testing.T) {
 			t.Fatalf("open workbook: %v", err)
 		}
 		defer f.Close()
-		checkCell(t, f, "Settlement total (Settlement report header)", "C", "1249.56")
-		checkCell(t, f, "In-scope Components", "B", "4")
-		checkCell(t, f, "In-scope Components", "C", "1249.56")
-		checkCell(t, f, "Components minus Settlement total", "C", "0.00")
-		checkCell(t, f, "In-scope Transaction lines (Released, incl. Transfer)", "C", "249.56")
-		checkCell(t, f, "Transfer (in scope)", "C", "-1000.00")
-		checkCell(t, f, "In-scope Released excl. Transfer", "C", "1249.56")
-		checkCell(t, f, "Released excl. Transfer minus Settlement total", "C", "0.00")
-		checkCell(t, f, "Deferred memo (out of scope)", "B", "2")
-		checkCell(t, f, "Deferred memo (out of scope)", "C", "125.50")
+		const sheet = report.SummarySheet
+		checkValue(t, f, sheet, "Settlement total (Settlement report header)", "D", "1249.56")
+		checkValue(t, f, sheet, "In-scope lines (count)", "D", "4")
+		checkValue(t, f, sheet, "In-scope lines (count)", "C", "5")
+		checkValue(t, f, sheet, "In-scope line total (Summary net plus routing gaps)", "D", "1249.56")
+		checkValue(t, f, sheet, "Remaining difference (in-scope lines minus Settlement total)", "D", "0.00")
+		checkValue(t, f, sheet, "Unreconciled payment amounts", "C", "-1010.00")
+		checkValue(t, f, sheet, "Unexplained difference (must be 0.00)", "D", "0.00")
+		checkValue(t, f, sheet, "In-scope Released excl. Unreconciled payments", "C", "1259.56")
+		checkValue(t, f, sheet, "Released excl. Unreconciled payments minus Settlement total", "C", "10.00")
+		checkValue(t, f, sheet, "Deferred memo, out of scope (2 lines)", "C", "125.50")
 	})
 
 	t.Run("re-ingesting leaves counts and totals unchanged", func(t *testing.T) {
@@ -273,35 +269,6 @@ func freshDatabase(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func ingestFixtures(t *testing.T, pool *pgxpool.Pool) ingest.Result {
-	t.Helper()
-	res, err := ingest.Run(context.Background(), pool, ingest.Inputs{
-		PaymentsPath:   filepath.Join(fixtures, "synthetic_payments.csv"),
-		SettlementPath: filepath.Join(fixtures, "synthetic_settlement.txt"),
-	})
-	if err != nil {
-		t.Fatalf("ingest: %v", err)
-	}
-	return res
-}
-
-func assertDec(t *testing.T, what string, got decimal.Decimal, want string) {
-	t.Helper()
-	w := decimal.RequireFromString(want)
-	if !got.Equal(w) {
-		t.Errorf("%s = %s, want %s", what, got.StringFixed(2), want)
-	}
-}
-
-func assertLine(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID int64, source string, lineNumber int, check func(store.Line)) {
-	t.Helper()
-	l, err := store.LoadLine(ctx, pool, runID, source, lineNumber)
-	if err != nil {
-		t.Fatalf("load %s line %d: %v", source, lineNumber, err)
-	}
-	check(l)
-}
-
 func assertPostedDate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID int64, source string, lineNumber int, wantDate, wantBasis string) {
 	t.Helper()
 	assertLine(t, ctx, pool, runID, source, lineNumber, func(l store.Line) {
@@ -312,29 +279,6 @@ func assertPostedDate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, run
 			t.Errorf("%s line %d date basis = %q, want %q", source, lineNumber, l.PostedDateBasis, wantBasis)
 		}
 	})
-}
-
-// checkCell finds the row whose column A equals label and compares the raw value of column col.
-func checkCell(t *testing.T, f *excelize.File, label, col, want string) {
-	t.Helper()
-	rows, err := f.GetRows(tieOutSheet, excelize.Options{RawCellValue: true})
-	if err != nil {
-		t.Fatalf("read rows: %v", err)
-	}
-	colIdx := int(col[0] - 'A')
-	for _, r := range rows {
-		if len(r) > 0 && r[0] == label {
-			got := ""
-			if colIdx < len(r) {
-				got = r[colIdx]
-			}
-			if got != want {
-				t.Errorf("workbook %q column %s = %q, want %q", label, col, got, want)
-			}
-			return
-		}
-	}
-	t.Errorf("workbook has no row labelled %q", label)
 }
 
 func fileSHA256(t *testing.T, path string) string {

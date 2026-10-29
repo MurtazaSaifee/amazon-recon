@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,7 +28,7 @@ import (
 //	line 12 Order  product 25.00
 //	line 13 Refund product -10.00 (P-006 routes it to refunded_sales)
 //	line 14 Order  all zero
-//	line 15 Transfer -1000.00 (P-009, the type+any rule, routes it to bank_account_transfer_round_off)
+//	line 15 Transfer -1000.00 (P-008, the type+description rule: a prefix match in fixed mode, not summarised)
 //
 // Settlement, in-scope components (synthetic_settlement_configs.csv):
 //
@@ -51,7 +52,7 @@ func TestSummaryDuringIngestion(t *testing.T) {
 
 	t.Run("lines are identified by the CSV line number of the rule that routed them", func(t *testing.T) {
 		assertMatched(t, ctx, pool, res.RunID, "payments", pmtOrderA, []string{"P-002", "P-003", "P-004", "P-005"})
-		assertMatched(t, ctx, pool, res.RunID, "payments", pmtTransfer, []string{"P-009"})
+		assertMatched(t, ctx, pool, res.RunID, "payments", pmtTransfer, []string{"P-008"})
 		assertMatched(t, ctx, pool, res.RunID, "settlement", setPrincipalA, []string{"S-002"})
 	})
 
@@ -60,16 +61,22 @@ func TestSummaryDuringIngestion(t *testing.T) {
 		assertSummary(t, rep, "Sales", "Tax", "469.12", "234.56")
 		assertSummary(t, rep, "Refunds", "Refunded sales", "-10.00", "0.00")
 		assertSummary(t, rep, "Expenses", "FBA fees", "0.00", "0.00")
-		assertUnmapped(t, rep, "bank_account_transfer_round_off", "-1000.00", "0.00")
+		if len(rep.Summary.Unmapped) != 0 {
+			t.Errorf("unmapped Summary fields = %+v, want none: the Transfer is not summarised", rep.Summary.Unmapped)
+		}
 	})
 
 	t.Run("a duplicated rule shows as a negative routing gap", func(t *testing.T) {
 		assertGap(t, rep.TieOut.Payments, "P-002,P-003,P-004,P-005", "-234.56")
 	})
 
+	t.Run("a line its prefix rule matches, and that is not summarised, is a routing gap", func(t *testing.T) {
+		assertGap(t, rep.TieOut.Payments, "P-008", "-1000.00")
+	})
+
 	t.Run("a settlement component with an unknown type is an Unmapped routing gap", func(t *testing.T) {
 		assertGap(t, rep.TieOut.Settlements, "Unmapped", "-10.00")
-		assertLoaded(t, ctx, pool, res.RunID, "settlement", setRefundUnmap, func(l store.Line) {
+		assertLine(t, ctx, pool, res.RunID, "settlement", setRefundUnmap, func(l store.Line) {
 			if l.RecordRef != "" || len(l.MatchedRuleIDs) != 0 {
 				t.Errorf("unmapped component record_ref %q rules %v, want none", l.RecordRef, l.MatchedRuleIDs)
 			}
@@ -81,13 +88,22 @@ func TestSummaryDuringIngestion(t *testing.T) {
 
 	t.Run("payments tie-out: Summary net plus routing gaps is the in-scope total", func(t *testing.T) {
 		tie := rep.TieOut.Payments
-		assertDec(t, "payments summary net", tie.SummaryNet, "484.12")
-		assertDec(t, "payments routing gaps", tie.GapsTotal, "-234.56")
+		assertDec(t, "payments summary net", tie.SummaryNet, "1484.12")
+		assertDec(t, "payments routing gaps", tie.GapsTotal, "-1234.56")
 		assertDec(t, "payments in-scope total", tie.InScope.Amount, "249.56")
 		if tie.InScope.Count != 5 {
 			t.Errorf("payments in-scope lines = %d, want 5", tie.InScope.Count)
 		}
 		assertDec(t, "payments remaining difference to the Settlement total", tie.Remaining, "-1000.00")
+		// The in-scope lines of Unreconciled payment records are the Transfer (-1000.00), the refund on
+		// line 13 (-10.00, whose settlement component is unmapped) and the zero-amount line 14.
+		assertDec(t, "payments unreconciled payment amounts", tie.Unreconciled.Amount, "-1010.00")
+		if tie.Unreconciled.Count != 3 {
+			t.Errorf("payments unreconciled payment lines = %d, want 3", tie.Unreconciled.Count)
+		}
+		// The unexplained 10.00 is the unmapped refund component (settlement line 6): it is in the
+		// Settlement total but on no record_ref, so it is not an Unreconciled settlement amount.
+		assertDec(t, "payments unexplained difference", tie.Unexplained, "10.00")
 		if rep.Deferred.Count != 2 {
 			t.Errorf("deferred memo count = %d, want 2", rep.Deferred.Count)
 		}
@@ -99,20 +115,22 @@ func TestSummaryDuringIngestion(t *testing.T) {
 		assertDec(t, "settlement routing gaps", tie.GapsTotal, "-10.00")
 		assertDec(t, "settlement in-scope total", tie.InScope.Amount, "1249.56")
 		assertDec(t, "settlement remaining difference", tie.Remaining, "0.00")
+		assertDec(t, "settlement unreconciled settlement amounts", tie.Unreconciled.Amount, "0.00")
+		assertDec(t, "settlement unexplained difference", tie.Unexplained, "0.00")
 	})
 
 	t.Run("out-of-scope and in-scope lines keep their record_ref and matched rules", func(t *testing.T) {
-		assertLoaded(t, ctx, pool, res.RunID, "payments", pmtTransfer, func(l store.Line) {
-			if l.RecordRef != "TRANSFER|12000000001|2026-07-05" {
-				t.Errorf("transfer record_ref = %q, want TRANSFER|12000000001|2026-07-05", l.RecordRef)
+		assertLine(t, ctx, pool, res.RunID, "payments", pmtTransfer, func(l store.Line) {
+			if want := "TRANSFER|To account ending with: 999|12000000001|2026-07-05"; l.RecordRef != want {
+				t.Errorf("transfer record_ref = %q, want %q", l.RecordRef, want)
 			}
 		})
-		assertLoaded(t, ctx, pool, res.RunID, "payments", pmtRefund, func(l store.Line) {
+		assertLine(t, ctx, pool, res.RunID, "payments", pmtRefund, func(l store.Line) {
 			if l.RecordRef != "701-0000002-0000002|SYN-B-002|2026-07-04" {
 				t.Errorf("refund record_ref = %q", l.RecordRef)
 			}
 		})
-		assertLoaded(t, ctx, pool, res.RunID, "payments", pmtDeferred, func(l store.Line) {
+		assertLine(t, ctx, pool, res.RunID, "payments", pmtDeferred, func(l store.Line) {
 			if l.RecordRef != "701-0000005-0000005|SYN-D-004|2026-07-09" {
 				t.Errorf("deferred record_ref = %q", l.RecordRef)
 			}
@@ -163,6 +181,22 @@ func TestRecomputeMismatchFailsReport(t *testing.T) {
 	}
 }
 
+// The workbook has four sheets, in this order. The tie-out is part of the Summary sheet, not a sheet of its own.
+func TestWorkbookSheetsAreSummaryConsolidatedAuditAndOutOfScope(t *testing.T) {
+	ctx := context.Background()
+	pool := newPipelineDB(t)
+	res := ingestFixtures(t, pool)
+	rep, err := recon.Build(ctx, pool, res.RunID)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	f := writeReport(t, rep)
+	want := []string{"Summary", "Consolidated Data", "Audit Trail", "Out of Scope"}
+	if got := f.GetSheetList(); !slices.Equal(got, want) {
+		t.Errorf("sheets = %v, want %v", got, want)
+	}
+}
+
 // The Summary sheet: groups with formula subtotals that also keep their values,
 // a variance column, the unmapped block, the tie-out, and the sign note.
 func TestSummarySheetFormulasKeepValues(t *testing.T) {
@@ -200,12 +234,26 @@ func TestSummarySheetFormulasKeepValues(t *testing.T) {
 	checkValue(t, f, sheet, "Product Charges", "C", "1025.00")
 	checkFormulaCell(t, f, sheet, "Tax", "E", "234.56")
 	checkValue(t, f, sheet, "Refunded sales", "C", "-10.00")
-	checkValue(t, f, sheet, "bank_account_transfer_round_off", "C", "-1000.00")
-	checkValue(t, f, sheet, "Summary net (all Summary fields)", "C", "484.12")
+	checkValue(t, f, sheet, "Summary net (all Summary fields)", "C", "1484.12")
 	checkValue(t, f, sheet, "Summary net (all Summary fields)", "D", "1259.56")
-	checkValue(t, f, sheet, "Routing gap, rule group P-002,P-003,P-004,P-005", "C", "-234.56")
+	checkValue(t, f, sheet, "Payments routing gap, rule group P-002,P-003,P-004,P-005", "C", "-234.56")
+	checkValue(t, f, sheet, "Payments routing gap, rule group P-008", "C", "-1000.00")
+	checkValue(t, f, sheet, "Settlements routing gap, rule group Unmapped", "D", "-10.00")
+	// Each source lists only its own rule groups, one row per group with a non-zero gap.
+	wantGaps := []string{
+		"Payments routing gap, rule group P-002,P-003,P-004,P-005|-234.56|",
+		"Payments routing gap, rule group P-008|-1000.00|",
+		"Settlements routing gap, rule group Unmapped||-10.00",
+	}
+	if got := routingGapRows(t, f, sheet); !slices.Equal(got, wantGaps) {
+		t.Errorf("routing gap rows\n got %q\nwant %q", got, wantGaps)
+	}
 	checkFormulaCell(t, f, sheet, "Remaining difference (in-scope lines minus Settlement total)", "C", "-1000.00")
 	checkValue(t, f, sheet, "Remaining difference (in-scope lines minus Settlement total)", "D", "0.00")
+	checkValue(t, f, sheet, "Unreconciled payment amounts", "C", "-1010.00")
+	checkValue(t, f, sheet, "Unreconciled settlement amounts", "D", "0.00")
+	checkFormulaCell(t, f, sheet, "Unexplained difference (must be 0.00)", "C", "10.00")
+	checkFormulaCell(t, f, sheet, "Unexplained difference (must be 0.00)", "D", "0.00")
 	checkValue(t, f, sheet, "Deferred memo, out of scope (2 lines)", "C", "125.50")
 }
 
@@ -242,18 +290,6 @@ func assertSummary(t *testing.T, rep recon.Report, group, line, wantP, wantS str
 	t.Errorf("summary has no line %s > %s", group, line)
 }
 
-func assertUnmapped(t *testing.T, rep recon.Report, field, wantP, wantS string) {
-	t.Helper()
-	for _, u := range rep.Summary.Unmapped {
-		if u.Field == field {
-			assertDec(t, field+" payments", u.Payments, wantP)
-			assertDec(t, field+" settlements", u.Settlements, wantS)
-			return
-		}
-	}
-	t.Errorf("unmapped block has no field %s", field)
-}
-
 func assertGap(t *testing.T, side recon.TieOutSide, rule, want string) {
 	t.Helper()
 	for _, g := range side.Gaps {
@@ -267,20 +303,11 @@ func assertGap(t *testing.T, side recon.TieOutSide, rule, want string) {
 
 func assertMatched(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID int64, source string, lineNumber int, want []string) {
 	t.Helper()
-	assertLoaded(t, ctx, pool, runID, source, lineNumber, func(l store.Line) {
+	assertLine(t, ctx, pool, runID, source, lineNumber, func(l store.Line) {
 		if fmt.Sprint(l.MatchedRuleIDs) != fmt.Sprint(want) {
 			t.Errorf("%s line %d matched rules = %v, want %v", source, lineNumber, l.MatchedRuleIDs, want)
 		}
 	})
-}
-
-func assertLoaded(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID int64, source string, lineNumber int, check func(store.Line)) {
-	t.Helper()
-	l, err := store.LoadLine(ctx, pool, runID, source, lineNumber)
-	if err != nil {
-		t.Fatalf("load %s line %d: %v", source, lineNumber, err)
-	}
-	check(l)
 }
 
 func hasWarning(ws []string, kind mapping.WarningKind) bool {
@@ -292,51 +319,21 @@ func hasWarning(ws []string, kind mapping.WarningKind) bool {
 	return false
 }
 
-// checkValue finds the row labelled label in column B and compares the raw value of col.
-func checkValue(t *testing.T, f *excelize.File, sheet, label, col, want string) {
+// routingGapRows returns the routing-gap rows of a sheet as "label|payments|settlements", raw values.
+func routingGapRows(t *testing.T, f *excelize.File, sheet string) []string {
 	t.Helper()
-	row := findLabel(t, f, sheet, label)
-	got, err := f.GetCellValue(sheet, fmt.Sprintf("%s%d", col, row), excelize.Options{RawCellValue: true})
-	if err != nil {
-		t.Fatalf("read %s%d: %v", col, row, err)
-	}
-	if got != want {
-		t.Errorf("%q column %s = %q, want %q", label, col, got, want)
-	}
-}
-
-// checkFormulaCell checks that the cell holds a formula and that its stored value is want.
-func checkFormulaCell(t *testing.T, f *excelize.File, sheet, label, col, want string) {
-	t.Helper()
-	row := findLabel(t, f, sheet, label)
-	cell := fmt.Sprintf("%s%d", col, row)
-	formula, err := f.GetCellFormula(sheet, cell)
-	if err != nil {
-		t.Fatalf("formula %s: %v", cell, err)
-	}
-	if formula == "" {
-		t.Errorf("%q %s has no formula", label, cell)
-	}
-	value, err := f.GetCellValue(sheet, cell, excelize.Options{RawCellValue: true})
-	if err != nil {
-		t.Fatalf("value %s: %v", cell, err)
-	}
-	if value != want {
-		t.Errorf("%q %s stored value = %q, want %q (formula %q)", label, cell, value, want, formula)
-	}
-}
-
-func findLabel(t *testing.T, f *excelize.File, sheet, label string) int {
-	t.Helper()
-	for row := 1; row <= 80; row++ {
-		v, err := f.GetCellValue(sheet, fmt.Sprintf("B%d", row))
+	var out []string
+	for row := 1; row <= 200; row++ {
+		label, err := f.GetCellValue(sheet, fmt.Sprintf("B%d", row))
 		if err != nil {
 			t.Fatalf("read B%d: %v", row, err)
 		}
-		if strings.TrimSpace(v) == label {
-			return row
+		if !strings.Contains(label, "routing gap, rule group") {
+			continue
 		}
+		p, _ := f.GetCellValue(sheet, fmt.Sprintf("C%d", row), excelize.Options{RawCellValue: true})
+		s, _ := f.GetCellValue(sheet, fmt.Sprintf("D%d", row), excelize.Options{RawCellValue: true})
+		out = append(out, label+"|"+p+"|"+s)
 	}
-	t.Fatalf("sheet %s has no row labelled %q", sheet, label)
-	return 0
+	return out
 }

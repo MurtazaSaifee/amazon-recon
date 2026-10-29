@@ -9,9 +9,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/xuri/excelize/v2"
 
-	"amazonrecon/internal/ingest"
 	"amazonrecon/internal/recon"
 	"amazonrecon/internal/report"
+	"amazonrecon/internal/source"
+	"amazonrecon/internal/store"
 )
 
 // The reconciliation fixtures (testdata/fixtures/reconciliation_*) hold one line of each outcome.
@@ -30,7 +31,7 @@ const (
 	reconOrderARef    = "701-0000001-0000001|SYN-A-001|2026-07-02"
 	reconOrderBRef    = "701-0000002-0000002|SYN-B-002|2026-07-03"
 	reconOrderCRef    = "701-0000003-0000003|SYN-C-003|2026-07-04"
-	reconTransferRef  = "TRANSFER|12000000003|2026-07-05"
+	reconTransferRef  = "TRANSFER|To account ending with: 999|12000000003|2026-07-05"
 	reconOrderFRef    = "701-0000006-0000006|SYN-F-006|2026-07-05"
 	reconOrderGRef    = "701-0000007-0000007|SYN-G-007|2026-07-06"
 )
@@ -42,11 +43,12 @@ var consolidatedHeaders = map[string]string{
 	"E": "settlement id", "F": "type", "G": "order id", "H": "sku", "I": "description", "J": "Quantity",
 	"K": "marketplace", "L": "account type", "M": "fulfillment", "N": "order city", "O": "order state",
 	"P": "order postal", "Q": "tax collection model", "R": "Total",
-	"S": "Product Charges", "T": "Tax", "AM": "Paid To Amazon",
+	"S": "Product Charges", "T": "Tax", "V": "Amazon Fees", "AB": "Refund Expenses", "AD": "Promo Rebates",
+	"AE": "FBA Fees", "AH": "Amazon Fees", "AM": "Paid To Amazon",
 	// The one routed Summary field with no Summary line gets a column on each side, after the Summary lines.
 	"AN": "bank_account_transfer_round_off",
 	"AO": "settlement-id", "AP": "settlement-start-date", "BI": "promotion-id", "BJ": "Total",
-	"BK": "Product Charges", "CE": "Paid To Amazon",
+	"BK": "Product Charges", "BN": "Amazon Fees", "BT": "Refund Expenses", "CE": "Paid To Amazon",
 	"CF": "bank_account_transfer_round_off",
 	"CG": "Reconciliation Status", "CH": "total (DS1-DS2)", "CI": "Product Charges (DS1-DS2)",
 	"DD": "bank_account_transfer_round_off (DS1-DS2)",
@@ -56,7 +58,7 @@ var consolidatedHeaders = map[string]string{
 func TestReconciliationOutcomes(t *testing.T) {
 	ctx := context.Background()
 	pool := newPipelineDB(t)
-	res := ingestReconFixtures(t, pool)
+	res := ingestFiles(t, pool, reconPaymentsFile, reconSettlementFile)
 	rep, err := recon.Build(ctx, pool, res.RunID)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -64,21 +66,20 @@ func TestReconciliationOutcomes(t *testing.T) {
 	r := rep.Reconciliation
 
 	t.Run("each status is counted once per record_ref", func(t *testing.T) {
-		if r.Counts.Reconciled != 1 {
-			t.Errorf("reconciled = %d, want 1", r.Counts.Reconciled)
+		want := map[recon.Status]int{
+			recon.Reconciled:               1,
+			recon.ReconciledWithDifference: 1,
+			recon.UnreconciledPayment:      3,
+			recon.UnreconciledSettlement:   2,
 		}
-		if r.Counts.ReconciledWithDifference != 1 {
-			t.Errorf("reconciled with difference = %d, want 1", r.Counts.ReconciledWithDifference)
+		for status, n := range want {
+			if r.Counts[status] != n {
+				t.Errorf("%s = %d, want %d", status.Label(), r.Counts[status], n)
+			}
 		}
-		if r.Counts.UnreconciledPayment != 3 {
-			t.Errorf("unreconciled payments = %d, want 3", r.Counts.UnreconciledPayment)
-		}
-		if r.Counts.UnreconciledSettlement != 2 {
-			t.Errorf("unreconciled settlements = %d, want 2", r.Counts.UnreconciledSettlement)
-		}
-		if r.Counts.UnmappedPayments != 0 || r.Counts.UnmappedSettlements != 2 {
+		if r.UnmappedLines[source.Payments] != 0 || r.UnmappedLines[source.Settlement] != 2 {
 			t.Errorf("unmapped lines payments/settlements = %d/%d, want 0/2",
-				r.Counts.UnmappedPayments, r.Counts.UnmappedSettlements)
+				r.UnmappedLines[source.Payments], r.UnmappedLines[source.Settlement])
 		}
 	})
 
@@ -162,7 +163,8 @@ func TestReconciliationOutcomes(t *testing.T) {
 func TestConsolidatedAndOutOfScopeSheets(t *testing.T) {
 	ctx := context.Background()
 	pool := newPipelineDB(t)
-	res := ingestReconFixtures(t, pool)
+	routeTransferToUnmappedField(t, pool)
+	res := ingestFiles(t, pool, reconPaymentsFile, reconSettlementFile)
 	rep, err := recon.Build(ctx, pool, res.RunID)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -187,7 +189,7 @@ func TestConsolidatedAndOutOfScopeSheets(t *testing.T) {
 
 	t.Run("Consolidated Data follows the sample's column order", func(t *testing.T) {
 		rows := sheetRows(t, f, "Consolidated Data")
-		header := rows[consolidatedHeaderRow-1]
+		header := rows[report.ConsolidatedHeaderRow-1]
 		for col, want := range consolidatedHeaders {
 			if got := cellAt(header, col); got != want {
 				t.Errorf("header %s = %q, want %q", col, got, want)
@@ -239,21 +241,43 @@ func TestConsolidatedAndOutOfScopeSheets(t *testing.T) {
 			t.Errorf("out-of-scope rows\n got %v\nwant %v", found, want)
 		}
 	})
+
+	t.Run("out-of-scope line numbers are numeric cells", func(t *testing.T) {
+		rows := sheetRows(t, f, "Out of Scope")
+		checked := 0
+		for i, r := range rows {
+			if len(r) == 0 || (r[0] != "Deferred" && r[0] != "Other settlement") {
+				continue
+			}
+			cell := fmt.Sprintf("D%d", i+1)
+			typ, err := f.GetCellType("Out of Scope", cell)
+			if err != nil {
+				t.Fatalf("cell type of %s: %v", cell, err)
+			}
+			// A numeric cell carries no text type: excelize reports it as unset or as a number. A text cell would be
+			// a shared or inline string.
+			if typ != excelize.CellTypeNumber && typ != excelize.CellTypeUnset {
+				t.Errorf("line number in %s is text (type %v), want a number", cell, typ)
+			}
+			checked++
+		}
+		if checked != 3 {
+			t.Errorf("checked %d out-of-scope line numbers, want 3", checked)
+		}
+	})
 }
 
-// consolidatedHeaderRow is the 1-based row of the Consolidated Data column headers.
-const consolidatedHeaderRow = 10
-
-func ingestReconFixtures(t *testing.T, pool *pgxpool.Pool) ingest.Result {
+// routeTransferToUnmappedField routes the Transfer's rule (P-008) to a Summary field with no Summary
+// line, the way a mapping fix would. The Consolidated sheet then has a column for that field.
+// It must run after seeding and before ingesting.
+func routeTransferToUnmappedField(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	res, err := ingest.Run(context.Background(), pool, ingest.Inputs{
-		PaymentsPath:   filepath.Join(fixtures, "reconciliation_payments.csv"),
-		SettlementPath: filepath.Join(fixtures, "reconciliation_settlement.txt"),
-	})
-	if err != nil {
-		t.Fatalf("ingest reconciliation fixtures: %v", err)
+	if _, err := store.ApplyFixes(context.Background(), pool, `UPDATE payment_mapping_rules
+		SET to_summary_field_when_positive_amount = 'bank_account_transfer_round_off',
+		    to_summary_field_when_negative_amount = 'bank_account_transfer_round_off'
+		WHERE rule_id = 'P-008';`); err != nil {
+		t.Fatalf("route the Transfer to an unmapped field: %v", err)
 	}
-	return res
 }
 
 func findRecord(t *testing.T, r recon.Reconciliation, ref string) recon.RecordRow {

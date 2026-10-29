@@ -6,6 +6,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
+
+	"amazonrecon/internal/store"
 )
 
 // AuditRow is one Contribution, with what a reviewer needs to trace it to its input line.
@@ -25,7 +27,7 @@ type AuditRow struct {
 // readAuditTrail reads every Contribution of the run, with its file, its Summary line and its record_ref.
 func readAuditTrail(ctx context.Context, pool *pgxpool.Pool, runID int64, rep *Report) error {
 	rows, err := pool.Query(ctx, `SELECT c.source, r.file_name, c.line_number, c.rule_id, c.amount_field,
-			c.amount::text, c.summary_field, COALESCE(m.summary_group, ''), COALESCE(m.summary_line, ''),
+			c.amount, c.summary_field, COALESCE(m.summary_group, ''), COALESCE(m.summary_line, ''),
 			COALESCE(r.record_ref, '')
 		FROM summary_contributions c
 		JOIN source_rows r ON r.run_id = c.run_id AND r.source = c.source AND r.line_number = c.line_number
@@ -38,14 +40,12 @@ func readAuditTrail(ctx context.Context, pool *pgxpool.Pool, runID int64, rep *R
 	defer rows.Close()
 	for rows.Next() {
 		var a AuditRow
-		var amount string
+		var amount store.Amount
 		if err := rows.Scan(&a.Source, &a.FileName, &a.LineNumber, &a.RuleID, &a.AmountField, &amount,
 			&a.SummaryField, &a.SummaryGroup, &a.SummaryLine, &a.RecordRef); err != nil {
-			return err
+			return fmt.Errorf("scan audit row: %w", err)
 		}
-		if a.Amount, err = decimal.NewFromString(amount); err != nil {
-			return err
-		}
+		a.Amount = amount.Decimal
 		rep.Audit = append(rep.Audit, a)
 	}
 	return rows.Err()

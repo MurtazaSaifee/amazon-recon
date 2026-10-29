@@ -2,7 +2,6 @@ package report
 
 import (
 	"fmt"
-	"sort"
 
 	"github.com/shopspring/decimal"
 	"github.com/xuri/excelize/v2"
@@ -10,7 +9,8 @@ import (
 	"amazonrecon/internal/recon"
 )
 
-// SummarySheet is the name of the sheet that holds the Summary, the unmapped block and the tie-out.
+// SummarySheet is the name of the sheet that holds the run header, the Summary, the unmapped block,
+// the tie-out to the Settlement total and the reconciliation counts.
 const SummarySheet = "Summary"
 
 // summaryNote is printed on the sheet. Source signs are kept, so the reader is told how to read them.
@@ -23,25 +23,16 @@ const summaryNote = "Source signs are kept: expenses and refunds are negative, a
 func writeSummary(f *excelize.File, r recon.Report, bold, money int) error {
 	w := &sheetWriter{f: f, sheet: SummarySheet}
 	w.text(1, "B", "Amazon Payments vs Settlement: Summary", bold)
-	w.text(3, "B", "Settlement ID", 0)
-	w.text(3, "C", r.Settlement.ID, 0)
-	w.text(4, "B", "Settlement period (UTC)", 0)
-	w.text(4, "C", r.Settlement.PeriodStart.Format("2006-01-02")+" to "+r.Settlement.PeriodEnd.Format("2006-01-02"), 0)
-	w.text(5, "B", "Run ID", 0)
-	w.text(5, "C", fmt.Sprint(r.RunID), 0)
-	for i, field := range runFields(r) {
-		w.text(6+i, "B", field.label, 0)
-		w.text(6+i, "C", field.value, 0)
-	}
-	w.text(10, "B", summaryNote, 0)
+	row := writeRunHeader(w, r, 3) + 1
+	w.text(row, "B", summaryNote, 0)
+	row += 2
 
-	const header = 11
-	w.text(header, "B", "Summary", bold)
-	w.text(header, "C", "Payments", bold)
-	w.text(header, "D", "Settlements", bold)
-	w.text(header, "E", "Payments minus Settlements", bold)
+	w.text(row, "B", "Summary", bold)
+	w.text(row, "C", "Payments", bold)
+	w.text(row, "D", "Settlements", bold)
+	w.text(row, "E", "Payments minus Settlements", bold)
+	row++
 
-	row := header + 1
 	for _, g := range groupLines(r.Summary.Lines) {
 		if len(g.lines) == 1 && g.lines[0].Line == g.name {
 			// A group with one line of the same name (Paid To Amazon) is that line.
@@ -67,7 +58,7 @@ func writeSummary(f *excelize.File, r recon.Report, bold, money int) error {
 
 	row = writeUnmapped(w, row, r.Summary.Unmapped, money, bold)
 	row = writeTieOut(w, row+1, r, money, bold)
-	writeStatusCounts(w, row+1, r.Reconciliation.Counts, bold)
+	writeStatusCounts(w, row+1, r.Reconciliation, bold)
 	return w.err
 }
 
@@ -125,13 +116,19 @@ func writeUnmapped(w *sheetWriter, row int, fields []recon.FieldTotal, money, bo
 	return row + 2
 }
 
-// writeTieOut writes the tie-out, one column per source. Each source's in-scope total is its
-// Summary net plus its routing gaps. The remaining difference is that total minus the Settlement total.
+// writeTieOut writes the tie-out, one column per source, from the in-scope lines to the Settlement
+// total. The residual is explained by the Unreconciled amounts of each side; what is left is the
+// unexplained difference, which must be zero.
 func writeTieOut(w *sheetWriter, row int, r recon.Report, money, bold int) int {
 	p, s := r.TieOut.Payments, r.TieOut.Settlements
 	w.text(row, "B", "Tie-out to the Settlement total", bold)
 	w.text(row, "C", "Payments", bold)
 	w.text(row, "D", "Settlements", bold)
+	row++
+
+	w.text(row, "B", "In-scope lines (count)", 0)
+	w.count(row, "C", p.InScope.Count)
+	w.count(row, "D", s.InScope.Count)
 	row++
 
 	netRow := row
@@ -140,30 +137,31 @@ func writeTieOut(w *sheetWriter, row int, r recon.Report, money, bold int) int {
 	w.number(row, "D", s.SummaryNet, money)
 	row++
 
-	gapRules := map[string]bool{}
+	// Each source lists only its own rule groups, and only the groups with a non-zero routing gap.
+	firstGap := row
+	listed := 0
 	for _, g := range p.Gaps {
-		gapRules[g.Rule] = true
+		if g.Amount.IsZero() {
+			continue
+		}
+		w.text(row, "B", "Payments routing gap, rule group "+g.Rule, 0)
+		w.number(row, "C", g.Amount, money)
+		row++
+		listed++
 	}
 	for _, g := range s.Gaps {
-		gapRules[g.Rule] = true
-	}
-	rules := make([]string, 0, len(gapRules))
-	for rule := range gapRules {
-		rules = append(rules, rule)
-	}
-	sort.Strings(rules)
-
-	firstGap := row
-	for _, rule := range rules {
-		w.text(row, "B", "Routing gap, rule group "+rule, 0)
-		w.number(row, "C", gapAmount(p.Gaps, rule), money)
-		w.number(row, "D", gapAmount(s.Gaps, rule), money)
+		if g.Amount.IsZero() {
+			continue
+		}
+		w.text(row, "B", "Settlements routing gap, rule group "+g.Rule, 0)
+		w.number(row, "D", g.Amount, money)
 		row++
+		listed++
 	}
 	lastGap := row - 1
 	gapsRow := row
 	w.text(row, "B", "Routing gaps total", bold)
-	if len(rules) == 0 {
+	if listed == 0 {
 		w.number(row, "C", decimal.Zero, money)
 		w.number(row, "D", decimal.Zero, money)
 	} else {
@@ -184,23 +182,34 @@ func writeTieOut(w *sheetWriter, row int, r recon.Report, money, bold int) int {
 	w.number(row, "D", r.Settlement.Total, money)
 	row++
 
+	remainingRow := row
 	w.text(row, "B", "Remaining difference (in-scope lines minus Settlement total)", bold)
 	w.formula(row, "C", fmt.Sprintf("C%d-C%d", inScopeRow, totalRow), p.Remaining, money)
 	w.formula(row, "D", fmt.Sprintf("D%d-D%d", inScopeRow, totalRow), s.Remaining, money)
+	row++
+
+	unreconPaymentRow := row
+	w.text(row, "B", "Unreconciled payment amounts", 0)
+	w.number(row, "C", p.Unreconciled.Amount, money)
+	row++
+	unreconSettlementRow := row
+	w.text(row, "B", "Unreconciled settlement amounts", 0)
+	w.number(row, "D", s.Unreconciled.Amount, money)
+	row++
+	w.text(row, "B", "Unexplained difference (must be 0.00)", bold)
+	w.formula(row, "C", fmt.Sprintf("C%d-C%d", remainingRow, unreconPaymentRow), p.Unexplained, money)
+	w.formula(row, "D", fmt.Sprintf("D%d-D%d", remainingRow, unreconSettlementRow), s.Unexplained, money)
+	row++
+
+	w.text(row, "B", "In-scope Released excl. Unreconciled payments", 0)
+	w.number(row, "C", r.ReleasedExcludingUnreconciled, money)
+	row++
+	w.text(row, "B", "Released excl. Unreconciled payments minus Settlement total", 0)
+	w.number(row, "C", r.ReleasedExcludingUnreconciledMinusTotal, money)
 	row++
 
 	w.text(row, "B", fmt.Sprintf("Deferred memo, out of scope (%d lines)", r.Deferred.Count), 0)
 	w.number(row, "C", r.Deferred.Amount, money)
 	w.text(row+1, "B", "Deferred lines have no Transaction Release Date. They are not in the tie-out; the memo shows the gap to the Settlement report.", 0)
 	return row + 3
-}
-
-// gapAmount returns a rule group's routing gap, or zero when the side has no such group.
-func gapAmount(gaps []recon.RoutingGap, rule string) decimal.Decimal {
-	for _, g := range gaps {
-		if g.Rule == rule {
-			return g.Amount
-		}
-	}
-	return decimal.Zero
 }

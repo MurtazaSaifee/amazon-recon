@@ -1,8 +1,11 @@
--- MAPPING_FIXES.sql: fixes to the mapping configs, applied after seed-config.
+-- MAPPING_FIXES.sql: fixes to the mapping configs, applied once to a freshly seeded config.
 --
--- Applied by `recon apply-fixes --file MAPPING_FIXES.sql` (make after) in one transaction: every
--- statement applies, or none does. Each UPDATE and DELETE is guarded by the old values it expects, so
--- applying the file again changes nothing. Every change is recorded in mapping_rule_history.
+-- Applied by `recon apply-fixes --file MAPPING_FIXES.sql` (make after), straight after seed-config, in one
+-- transaction. Every statement must change at least one row, so either every statement applies or none does.
+-- Each UPDATE and DELETE is guarded by the old values it expects. A guard that matches no row (for example,
+-- a second apply to the same config) fails the build loudly with the statement's number, and nothing is
+-- committed. Every change is recorded in mapping_rule_history, and apply-fixes prints the rows each statement
+-- changed.
 --
 -- Block format. One block per defect, in this shape:
 --
@@ -42,7 +45,8 @@
 --                  the payments promotional_rebates column for ORDER lines to expenses_other, which is the wrong bucket.
 --                  The sibling REFUND promotional_rebates rule (P-017) routes to refunded_expenses, as the settlement
 --                  refund promotions do. P-065 has 3,983 negative lines and no positive ones in this settlement.
--- Variance closed: Expenses › Promo rebates +11,273.53 becomes 0.00, and Expenses › Other -11,273.53 becomes 0.00.
+-- Variance closed: Expenses › Promo rebates +11,273.53 → 0.00, and Expenses › Other -11,273.53 → 0.00 (applied first,
+--                  so these are the values on the baseline; payments moves -11,273.53 from Other to Promo rebates).
 UPDATE payment_mapping_rules
 SET to_summary_field_when_positive_amount = 'expenses_promotional_rebates',
     to_summary_field_when_negative_amount = 'expenses_promotional_rebates'
@@ -59,8 +63,8 @@ WHERE rule_id = 'P-065'
 --                  never appears on a Summary line. The settlement report's gift wrap (ORDER / ITEMPRICE / GIFTWRAP,
 --                  S-066, 11.61 on 3 lines) routes to sales_other. The payments side should use the same bucket. The
 --                  three payments lines (3.99, 3.99 and 3.63) are all positive.
--- Variance closed: the unmapped sales_gift_wrap_credits field 11.61 becomes 0.00 (it is now in Sales › Other on the
---                  payments side, which then matches the settlements side apart from the tax component in root cause B).
+-- Variance closed: Sales › Other -11.97 → -0.36 (payments 0.00 → 11.61), and the unmapped sales_gift_wrap_credits
+--                  field 11.61 → 0.00. The remaining -0.36 is the gift wrap tax, which the accounting policy closes.
 UPDATE payment_mapping_rules
 SET to_summary_field_when_positive_amount = 'sales_other',
     to_summary_field_when_negative_amount = 'sales_other'
@@ -78,8 +82,8 @@ WHERE rule_id = 'P-070'
 --                  The duplicate is the one with the wrong field: the config has no reason to route one tax column to
 --                  two lines, and the policy below sends the column to Sales › Tax. The DELETE is recorded in
 --                  mapping_rule_history.
--- Variance closed: Sales › Shipping 13,572.17 becomes 93.20 (the tax split in root cause B, with the policy below
---                  closing the rest); together with F4 this removes the 13,478.97 double count.
+-- Variance closed: Sales › Shipping 13,572.17 → -103.42 (payments 21,773.13 → 8,097.54) after this block, on top of the
+--                  blocks above. With P-005 (the next block) it is 93.20; together the two remove the 13,478.97 double count.
 DELETE FROM payment_mapping_rules
 WHERE rule_id = 'P-072'
   AND transaction_type = 'ORDER'
@@ -96,7 +100,8 @@ WHERE rule_id = 'P-072'
 -- Why:             P-005 and P-006 both match every ORDER line and route the same low_value_goods column (-196.62 over 50
 --                  lines), P-005 to Shipping and P-006 to Product Charges. The Summary counts it twice. P-006 stays as
 --                  the one row that carries the column; its Summary field is set by the policy below.
--- Variance closed: Sales › Shipping, the -196.62 double count, which with F3 removes the 13,478.97 double count.
+-- Variance closed: Sales › Shipping -103.42 → 93.20 (payments 8,097.54 → 8,294.16, the -196.62 double count removed).
+--                  With the block above, Sales › Shipping goes 13,572.17 → 93.20 in total; the policy below closes the 93.20.
 DELETE FROM payment_mapping_rules
 WHERE rule_id = 'P-005'
   AND transaction_type = 'ORDER'
@@ -119,7 +124,7 @@ WHERE rule_id = 'P-005'
 --                  transaction type match a line whose description starts with the rule's description followed by "_"
 --                  or ":", after the exact and wildcard rules and before the Catch-all. It is on in a fixed run and off
 --                  in a baseline run, which is recorded on the run. Seam-2 tests cover both modes.
--- Variance closed: Expenses › Amazon fees -133,756.51 becomes 0.00 (payments -132,593.41, the same as the settlements).
+-- Variance closed: Expenses › Amazon fees -133,756.51 → 0.00 (payments -266,349.92 → -132,593.41, the same as the settlements).
 --                  The Transfer is then an Unreconciled payment with no Summary contribution, as its rule intends, and it
 --                  is counted in the Payments Tie-out routing gap.
 
@@ -144,12 +149,12 @@ WHERE rule_id = 'P-005'
 --                  reconciliation rule rather than a config row; or (b) a Summary line that holds all sales tax, which
 --                  is the accounting policy below. The policy is the only one applied here, because (a) needs
 --                  per-record shares that the payments report does not carry.
--- Variance closed: none by itself. Sales › Product Charges -92.84, Shipping +93.20 and Other -0.36 (after F2 to F4) are
---                  the residuals this limitation leaves, and they net to 0.00. See the accounting-policy section.
+-- Variance closed: none by itself. After the blocks above it leaves Sales › Product Charges -92.84, Shipping 93.20 and
+--                  Other -0.36, which net to 0.00 across the Sales lines. The accounting policy below closes them.
 
 -- ===== Accounting-policy calls (separate; not objective fixes; each one needs a reviewer decision) =====
 
--- Policy:          Route all sales tax and the tax on refunds to Sales › Tax, both signs
+-- Defect:          Sales tax and refund tax split across Summary lines the payments config cannot split
 -- Kind:            accounting-policy call (applied; reviewer approved 2026-10-28)
 -- Recommendation:  Route every tax component to Sales › Tax (sales_tax, the sample's Tax line, which has no rule in the
 --                  baseline). This keeps the tax out of Product Charges, Shipping, Other and Refund expenses, where it
@@ -167,9 +172,11 @@ WHERE rule_id = 'P-005'
 --                  rules routed here, S-004 has no positive lines in this settlement. P-014 is the refund tax on the
 --                  payments side, which the Refund expenses line never routed; the settlement refund tax moves out of
 --                  Refund expenses with it, so both sides agree there.
--- Variance closed: Sales › Tax 0.00 becomes 13,436.38 on both sides (payments 13,436.38, settlements 13,436.38);
---                  Sales › Product Charges -92.84 becomes 0.00; Sales › Shipping 93.20 becomes 0.00; Sales › Other -0.36
---                  becomes 0.00; Refunds › Refund expenses 42.59 becomes 0.00.
+-- Variance closed: Sales › Tax: both sides 0.00 → 13,436.38, Variance 0.00 throughout;
+--                  Sales › Product Charges -92.84 → 0.00 (payments 348,815.93 → 335,336.96);
+--                  Sales › Shipping 93.20 → 0.00 (payments 8,294.16 on both sides);
+--                  Sales › Other -0.36 → 0.00 (payments 11.61 on both sides);
+--                  Refunds › Refund expenses 42.59 → 0.00 (payments 258.87 on both sides).
 -- Applied:         yes
 UPDATE payment_mapping_rules
 SET to_summary_field_when_positive_amount = 'sales_tax',

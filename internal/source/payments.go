@@ -2,13 +2,16 @@ package source
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
 	"slices"
 	"strings"
+
+	"github.com/shopspring/decimal"
+
+	"amazonrecon/internal/textfile"
 )
 
 const paymentsPreambleLines = 9
@@ -43,13 +46,13 @@ type PaymentsReport struct {
 func ReadPayments(r io.Reader) (PaymentsReport, error) {
 	br := bufio.NewReader(r)
 	var out PaymentsReport
-	if err := skipBOM(br); err != nil {
+	if err := textfile.SkipBOM(br); err != nil {
 		return out, err
 	}
 
 	lineNo := 0
 	for range paymentsPreambleLines {
-		text, ok, err := readLine(br)
+		text, ok, err := textfile.ReadLine(br)
 		if err != nil {
 			return out, err
 		}
@@ -60,7 +63,7 @@ func ReadPayments(r io.Reader) (PaymentsReport, error) {
 		out.Preamble = append(out.Preamble, text)
 	}
 
-	text, ok, err := readLine(br)
+	text, ok, err := textfile.ReadLine(br)
 	if err != nil {
 		return out, err
 	}
@@ -77,7 +80,7 @@ func ReadPayments(r io.Reader) (PaymentsReport, error) {
 	}
 
 	for {
-		text, ok, err := readLine(br)
+		text, ok, err := textfile.ReadLine(br)
 		if err != nil {
 			return out, err
 		}
@@ -127,14 +130,17 @@ func parsePaymentsLine(lineNo int, text string, header []string) (Line, *ParseEr
 	if status == "" {
 		return fail("Transaction status is empty")
 	}
-	amount, err := ParseAmount(raw["total"])
+	amount, err := parsePaymentsAmount(raw["total"])
 	if err != nil {
 		return fail(fmt.Sprintf("total: %v", err))
 	}
+	amounts := make(map[string]decimal.Decimal, len(PaymentsAmountColumns))
 	for _, col := range PaymentsAmountColumns {
-		if _, err := ParseAmount(raw[col]); err != nil {
+		d, err := parsePaymentsAmount(raw[col])
+		if err != nil {
 			return fail(fmt.Sprintf("%s: %v", col, err))
 		}
+		amounts[col] = d
 	}
 
 	// Released lines carry a release date, which is the posted date. Deferred
@@ -160,35 +166,10 @@ func parsePaymentsLine(lineNo int, text string, header []string) (Line, *ParseEr
 		SKU:             raw["sku"],
 		Status:          raw["Transaction status"],
 		Amount:          amount,
+		Amounts:         amounts,
 		PostedDate:      posted,
 		PostedDateBasis: basis,
 	}, nil
-}
-
-// skipBOM drops a leading UTF-8 byte order mark, if there is one.
-func skipBOM(br *bufio.Reader) error {
-	b, err := br.Peek(3)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-	if bytes.Equal(b, []byte{0xEF, 0xBB, 0xBF}) {
-		_, err = br.Discard(3)
-		return err
-	}
-	return nil
-}
-
-// readLine returns the next line without its line ending. ok is false at the
-// end of input. A final line without a newline is still returned.
-func readLine(br *bufio.Reader) (text string, ok bool, err error) {
-	s, err := br.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", false, err
-	}
-	if s == "" {
-		return "", false, nil
-	}
-	return strings.TrimRight(s, "\r\n"), true, nil
 }
 
 // parseCSVRecord parses one physical line as one CSV record.

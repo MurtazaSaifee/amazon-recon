@@ -7,12 +7,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
-)
 
-// Source names as stored in the summary tables.
-const (
-	sourcePayments   = "payments"
-	sourceSettlement = "settlement"
+	"amazonrecon/internal/source"
+	"amazonrecon/internal/store"
 )
 
 // SummaryLine is one line of the Summary sheet, with its amount from each source.
@@ -37,6 +34,9 @@ type Summary struct {
 	Unmapped []FieldTotal  // routed fields with no Summary line, sorted by field
 }
 
+// unmappedGroup labels the routing gap of lines that no rule mapped.
+const unmappedGroup = "Unmapped"
+
 // RoutingGap is the part of one rule group's lines that no Contribution routed.
 type RoutingGap struct {
 	Rule   string // the matched rule IDs joined by commas, or "Unmapped"
@@ -52,6 +52,13 @@ type TieOutSide struct {
 	InScope         Total // in-scope lines of the source
 	SettlementTotal decimal.Decimal
 	Remaining       decimal.Decimal // in-scope total minus the Settlement total
+
+	// Unreconciled is the in-scope lines of this side's Unreconciled records: payment lines for the
+	// payments side, settlement components for the settlements side. Unreconciled is the reason the
+	// residual exists, so it is read from the reconciliation status, not from any rule or line type.
+	Unreconciled Total
+	// Unexplained is Remaining minus Unreconciled. It is the part of the residual no record accounts for.
+	Unexplained decimal.Decimal
 }
 
 // TieOut holds the tie-out of both sources.
@@ -81,12 +88,12 @@ func buildSummary(ctx context.Context, pool *pgxpool.Pool, runID int64, rep *Rep
 // checkRunningTotals recomputes each (source, Summary field) total from the Contributions and
 // fails with the first field that differs from the running total written during ingestion.
 func checkRunningTotals(ctx context.Context, pool *pgxpool.Pool, runID int64) error {
-	recomputed, err := sumsByField(ctx, pool, `SELECT source, summary_field, SUM(amount)::text
+	recomputed, err := sumsByField(ctx, pool, `SELECT source, summary_field, SUM(amount)
 		FROM summary_contributions WHERE run_id = $1 GROUP BY source, summary_field`, runID)
 	if err != nil {
 		return fmt.Errorf("recompute summary: %w", err)
 	}
-	running, err := sumsByField(ctx, pool, `SELECT source, summary_field, amount::text
+	running, err := sumsByField(ctx, pool, `SELECT source, summary_field, amount
 		FROM summary_running WHERE run_id = $1`, runID)
 	if err != nil {
 		return fmt.Errorf("read running summary totals: %w", err)
@@ -122,15 +129,12 @@ func sumsByField(ctx context.Context, pool *pgxpool.Pool, query string, runID in
 	defer rows.Close()
 	out := map[string]decimal.Decimal{}
 	for rows.Next() {
-		var source, field, amount string
-		if err := rows.Scan(&source, &field, &amount); err != nil {
-			return nil, err
+		var src, field string
+		var amount store.Amount
+		if err := rows.Scan(&src, &field, &amount); err != nil {
+			return nil, fmt.Errorf("scan summary field: %w", err)
 		}
-		d, err := decimal.NewFromString(amount)
-		if err != nil {
-			return nil, err
-		}
-		out[source+" "+field] = d
+		out[src+" "+field] = amount.Decimal
 	}
 	return out, rows.Err()
 }
@@ -138,28 +142,23 @@ func sumsByField(ctx context.Context, pool *pgxpool.Pool, query string, runID in
 // readSummaryLines reads every Summary line in display order with its amounts from each source.
 func readSummaryLines(ctx context.Context, pool *pgxpool.Pool, runID int64, rep *Report) error {
 	rows, err := pool.Query(ctx, `SELECT m.summary_group, m.summary_line, COALESCE(m.summary_field, ''),
-			COALESCE(SUM(r.amount) FILTER (WHERE r.source = 'payments'), 0)::text,
-			COALESCE(SUM(r.amount) FILTER (WHERE r.source = 'settlement'), 0)::text
+			COALESCE(SUM(r.amount) FILTER (WHERE r.source = $2), 0),
+			COALESCE(SUM(r.amount) FILTER (WHERE r.source = $3), 0)
 		FROM summary_line_map m
 		LEFT JOIN summary_running r ON r.run_id = $1 AND r.summary_field = m.summary_field
 		GROUP BY m.display_order, m.summary_group, m.summary_line, m.summary_field
-		ORDER BY m.display_order`, runID)
+		ORDER BY m.display_order`, runID, source.Payments, source.Settlement)
 	if err != nil {
 		return fmt.Errorf("read summary lines: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var l SummaryLine
-		var p, s string
+		var p, s store.Amount
 		if err := rows.Scan(&l.Group, &l.Line, &l.Field, &p, &s); err != nil {
-			return err
+			return fmt.Errorf("scan summary line: %w", err)
 		}
-		if l.Payments, err = decimal.NewFromString(p); err != nil {
-			return err
-		}
-		if l.Settlements, err = decimal.NewFromString(s); err != nil {
-			return err
-		}
+		l.Payments, l.Settlements = p.Decimal, s.Decimal
 		rep.Summary.Lines = append(rep.Summary.Lines, l)
 	}
 	return rows.Err()
@@ -168,29 +167,24 @@ func readSummaryLines(ctx context.Context, pool *pgxpool.Pool, runID int64, rep 
 // readUnmapped reads the routed Summary fields that have no Summary line.
 func readUnmapped(ctx context.Context, pool *pgxpool.Pool, runID int64, rep *Report) error {
 	rows, err := pool.Query(ctx, `SELECT r.summary_field,
-			COALESCE(SUM(r.amount) FILTER (WHERE r.source = 'payments'), 0)::text,
-			COALESCE(SUM(r.amount) FILTER (WHERE r.source = 'settlement'), 0)::text
+			COALESCE(SUM(r.amount) FILTER (WHERE r.source = $2), 0),
+			COALESCE(SUM(r.amount) FILTER (WHERE r.source = $3), 0)
 		FROM summary_running r
 		WHERE r.run_id = $1
 		  AND NOT EXISTS (SELECT 1 FROM summary_line_map m WHERE m.summary_field = r.summary_field)
 		GROUP BY r.summary_field
-		ORDER BY r.summary_field`, runID)
+		ORDER BY r.summary_field`, runID, source.Payments, source.Settlement)
 	if err != nil {
 		return fmt.Errorf("read unmapped summary fields: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var f FieldTotal
-		var p, s string
+		var p, s store.Amount
 		if err := rows.Scan(&f.Field, &p, &s); err != nil {
-			return err
+			return fmt.Errorf("scan unmapped summary field: %w", err)
 		}
-		if f.Payments, err = decimal.NewFromString(p); err != nil {
-			return err
-		}
-		if f.Settlements, err = decimal.NewFromString(s); err != nil {
-			return err
-		}
+		f.Payments, f.Settlements = p.Decimal, s.Decimal
 		rep.Summary.Unmapped = append(rep.Summary.Unmapped, f)
 	}
 	return rows.Err()
@@ -200,69 +194,62 @@ func readUnmapped(ctx context.Context, pool *pgxpool.Pool, runID int64, rep *Rep
 // in-scope total. The remaining difference is that total minus the Settlement total.
 func readTieOut(ctx context.Context, pool *pgxpool.Pool, runID int64, rep *Report) error {
 	for _, side := range []struct {
-		source string
-		out    *TieOutSide
+		name string
+		out  *TieOutSide
 	}{
-		{sourcePayments, &rep.TieOut.Payments},
-		{sourceSettlement, &rep.TieOut.Settlements},
+		{source.Payments, &rep.TieOut.Payments},
+		{source.Settlement, &rep.TieOut.Settlements},
 	} {
-		if err := readSideTieOut(ctx, pool, runID, side.source, side.out, rep.Settlement.Total); err != nil {
+		if err := readSideTieOut(ctx, pool, runID, side.name, side.out, rep.Settlement.Total); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func readSideTieOut(ctx context.Context, pool *pgxpool.Pool, runID int64, source string, out *TieOutSide, settlementTotal decimal.Decimal) error {
-	var net string
+// readSideTieOut reads one source's tie-out. side is the source name.
+func readSideTieOut(ctx context.Context, pool *pgxpool.Pool, runID int64, side string, out *TieOutSide, settlementTotal decimal.Decimal) error {
+	var net store.Amount
 	if err := pool.QueryRow(ctx,
-		"SELECT COALESCE(SUM(amount), 0)::text FROM summary_running WHERE run_id = $1 AND source = $2",
-		runID, source).Scan(&net); err != nil {
-		return fmt.Errorf("summary net of %s: %w", source, err)
+		"SELECT COALESCE(SUM(amount), 0) FROM summary_running WHERE run_id = $1 AND source = $2",
+		runID, side).Scan(&net); err != nil {
+		return fmt.Errorf("summary net of %s: %w", side, err)
 	}
-	var err error
-	if out.SummaryNet, err = decimal.NewFromString(net); err != nil {
-		return err
-	}
+	out.SummaryNet = net.Decimal
 
 	var count int
-	var inScope string
-	if err := pool.QueryRow(ctx, `SELECT count(*)::int, COALESCE(SUM(amount), 0)::text
+	var inScope store.Amount
+	if err := pool.QueryRow(ctx, `SELECT count(*)::int, COALESCE(SUM(amount), 0)
 		FROM source_rows
-		WHERE run_id = $1 AND source = $2 AND in_scope AND line_kind IN ('transaction', 'component')`,
-		runID, source).Scan(&count, &inScope); err != nil {
-		return fmt.Errorf("in-scope total of %s: %w", source, err)
+		WHERE run_id = $1 AND source = $2 AND `+sqlInScope,
+		runID, side).Scan(&count, &inScope); err != nil {
+		return fmt.Errorf("in-scope total of %s: %w", side, err)
 	}
-	out.InScope.Count = count
-	if out.InScope.Amount, err = decimal.NewFromString(inScope); err != nil {
-		return err
-	}
+	out.InScope = Total{Count: count, Amount: inScope.Decimal}
 
 	// Routing gap = line amount minus the sum of that line's Contributions, grouped by the matched rules.
-	rows, err := pool.Query(ctx, `SELECT COALESCE(array_to_string(matched_rule_ids, ','), 'Unmapped') AS rule_group,
-			count(*)::int, COALESCE(SUM(amount - routed), 0)::text
+	rows, err := pool.Query(ctx, `SELECT COALESCE(array_to_string(matched_rule_ids, ','), '`+unmappedGroup+`') AS rule_group,
+			count(*)::int, COALESCE(SUM(amount - routed), 0)
 		FROM (
 			SELECT r.matched_rule_ids, r.amount,
 				COALESCE((SELECT SUM(c.amount) FROM summary_contributions c
 					WHERE c.run_id = r.run_id AND c.source = r.source AND c.line_number = r.line_number), 0) AS routed
 			FROM source_rows r
-			WHERE r.run_id = $1 AND r.source = $2 AND r.in_scope AND r.line_kind IN ('transaction', 'component')
+			WHERE r.run_id = $1 AND r.source = $2 AND `+sqlInScope+`
 		) lines
 		GROUP BY rule_group
-		ORDER BY rule_group`, runID, source)
+		ORDER BY rule_group`, runID, side)
 	if err != nil {
-		return fmt.Errorf("routing gaps of %s: %w", source, err)
+		return fmt.Errorf("routing gaps of %s: %w", side, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var g RoutingGap
-		var gap string
+		var gap store.Amount
 		if err := rows.Scan(&g.Rule, &g.Lines, &gap); err != nil {
-			return err
+			return fmt.Errorf("scan routing gap of %s: %w", side, err)
 		}
-		if g.Amount, err = decimal.NewFromString(gap); err != nil {
-			return err
-		}
+		g.Amount = gap.Decimal
 		out.Gaps = append(out.Gaps, g)
 		out.GapsTotal = out.GapsTotal.Add(g.Amount)
 	}
@@ -272,5 +259,21 @@ func readSideTieOut(ctx context.Context, pool *pgxpool.Pool, runID int64, source
 
 	out.SettlementTotal = settlementTotal
 	out.Remaining = out.InScope.Amount.Sub(settlementTotal)
+
+	unreconciled := UnreconciledPayment
+	if side == source.Settlement {
+		unreconciled = UnreconciledSettlement
+	}
+	var unreconCount int
+	var unreconAmount store.Amount
+	if err := pool.QueryRow(ctx, `SELECT count(*)::int, COALESCE(SUM(r.amount), 0)
+		FROM source_rows r
+		JOIN reconciliation_by_record_ref v ON v.run_id = r.run_id AND v.record_ref = r.record_ref
+		WHERE r.run_id = $1 AND r.source = $2 AND r.in_scope AND v.status = $3`,
+		runID, side, string(unreconciled)).Scan(&unreconCount, &unreconAmount); err != nil {
+		return fmt.Errorf("unreconciled amounts of %s: %w", side, err)
+	}
+	out.Unreconciled = Total{Count: unreconCount, Amount: unreconAmount.Decimal}
+	out.Unexplained = out.Remaining.Sub(out.Unreconciled.Amount)
 	return nil
 }

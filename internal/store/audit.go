@@ -46,11 +46,16 @@ func SetRunConfig(ctx context.Context, tx pgx.Tx, runID int64, configHash, mode 
 	return err
 }
 
-// ConfigHash is the SHA-256 (hex) of the mapping rules and the Summary-line map, read inside tx.
+// Querier is what the readers need: a connection pool or a transaction.
+type Querier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// ConfigHash is the SHA-256 (hex) of the mapping rules and the Summary-line map, read through q.
 // Each table is read in rule order (csv_line for the rules, display_order for the Summary lines)
 // and each row is hashed as its JSON text, so any change to a rule, its order or the Summary-line
 // map changes the hash.
-func ConfigHash(ctx context.Context, tx pgx.Tx) (string, error) {
+func ConfigHash(ctx context.Context, q Querier) (string, error) {
 	sections := []struct{ name, query string }{
 		{"payment_mapping_rules", "SELECT to_jsonb(t)::text FROM payment_mapping_rules t ORDER BY csv_line"},
 		{"settlement_mapping_rules", "SELECT to_jsonb(t)::text FROM settlement_mapping_rules t ORDER BY csv_line"},
@@ -59,7 +64,7 @@ func ConfigHash(ctx context.Context, tx pgx.Tx) (string, error) {
 	h := sha256.New()
 	for _, s := range sections {
 		fmt.Fprintf(h, "[%s]\n", s.name)
-		rows, err := tx.Query(ctx, s.query)
+		rows, err := q.Query(ctx, s.query)
 		if err != nil {
 			return "", fmt.Errorf("hash %s: %w", s.name, err)
 		}

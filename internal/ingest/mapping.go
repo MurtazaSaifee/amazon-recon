@@ -8,6 +8,7 @@ import (
 	"amazonrecon/internal/mapping"
 	"amazonrecon/internal/source"
 	"amazonrecon/internal/store"
+	"amazonrecon/internal/timefmt"
 )
 
 // mappedRow scopes a line and maps it. Every Transaction line and Component is mapped, in or
@@ -18,11 +19,7 @@ func mappedRow(m *mapping.Mapper, fileName string, l source.Line, headerID strin
 	var res mapping.Result
 	switch l.Source {
 	case source.Payments:
-		tl, err := transactionLine(l)
-		if err != nil {
-			return store.SourceRow{}, err
-		}
-		res = m.MapTransaction(tl)
+		res = m.MapTransaction(transactionLine(l))
 	case source.Settlement:
 		res = m.MapComponent(component(l))
 	default:
@@ -32,16 +29,11 @@ func mappedRow(m *mapping.Mapper, fileName string, l source.Line, headerID strin
 	return row, nil
 }
 
-// transactionLine converts a stored Payments line into the mapping input. Each typed amount
-// column is read from the raw payload and keyed by its Amount field name. The total is read
-// from the line's own amount.
-func transactionLine(l source.Line) (mapping.TransactionLine, error) {
-	amounts := make(map[string]decimal.Decimal, len(source.PaymentsAmountColumns))
-	for _, col := range source.PaymentsAmountColumns {
-		d, err := source.ParseAmount(l.Raw[col])
-		if err != nil {
-			return mapping.TransactionLine{}, fmt.Errorf("line %d, %s: %w", l.LineNumber, col, err)
-		}
+// transactionLine converts a parsed Payments line into the mapping input. The typed amounts were
+// parsed once by the reader; each is keyed by its Amount field name here.
+func transactionLine(l source.Line) mapping.TransactionLine {
+	amounts := make(map[string]decimal.Decimal, len(l.Amounts))
+	for col, d := range l.Amounts {
 		amounts[mapping.AmountFieldForColumn(col)] = d
 	}
 	return mapping.TransactionLine{
@@ -49,7 +41,7 @@ func transactionLine(l source.Line) (mapping.TransactionLine, error) {
 		TransactionType: l.TxnType,
 		Amounts:         amounts,
 		Total:           l.Amount,
-	}, nil
+	}
 }
 
 // component converts a stored Settlement component into the mapping input.
@@ -70,7 +62,7 @@ func keysOf(l source.Line) mapping.Keys {
 	return mapping.Keys{
 		TxnRef:          l.TxnRef,
 		SKU:             l.SKU,
-		Date:            l.PostedDate.Format("2006-01-02"),
+		Date:            timefmt.Date(l.PostedDate),
 		SettlementID:    l.SettlementID,
 		Description:     l.Description,
 		ShipmentID:      l.Raw["shipment-id"],

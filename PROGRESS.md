@@ -30,12 +30,12 @@ A running record of what I tried, what I ruled out, and how I isolated each vari
 4. Settlement `ORDER / Promotion / TaxDiscount` maps to `sales_shipping`.
 5. Payments `ORDER / gift_wrap_credits` maps to `sales_gift_wrap_credits`, which has no line on the Summary sheet. Settlement `GiftWrap` maps to `sales_other`.
 6. Payments `REFUND / sales_tax_collected` has no summary field. Settlement `REFUND / ItemPrice / Tax` routes by sign to `total_refund_expense_or_sales_amt` or `refunded_expenses`.
-7. The payments catch-all row (`transaction_type` empty, `any`, `total` → `expenses_amazon_fees`) would absorb the Transfer row unless `TRANSFER / TO_ACCOUNT_ENDING` matches `To account ending with: 999`. This may be a matching-logic question (prefix match) rather than a config defect.
+7. The payments catch-all row (`transaction_type` empty, `any`, `total` → `expenses_amazon_fees`) would absorb the Transfer row unless `TRANSFER / TO_ACCOUNT_ENDING` matches `To account ending with: NNN`. This may be a matching-logic question (prefix match) rather than a config defect.
 
 Each of these gets confirmed or ruled out against the actual Summary deltas once the pipeline runs.
 
 ### Facts checked while designing
-- With minimal normalisation, every in-scope payments line and settlement line matches at least one mapping rule. The one exception is the **Transfer** line (`TO_ACCOUNT_ENDING_WITH:_999`). No `TRANSFER` rule matches it exactly, so it falls through to the catch-all rule (empty `transaction_type`), which routes `total` to `expenses_amazon_fees`. Expected in the baseline: a −133,756.51 difference on Expenses › Amazon fees.
+- With minimal normalisation, every in-scope payments line and settlement line matches at least one mapping rule. The one exception is the **Transfer** line (`TO_ACCOUNT_ENDING_WITH:_NNN`). No `TRANSFER` rule matches it exactly, so it falls through to the catch-all rule (empty `transaction_type`), which routes `total` to `expenses_amazon_fees`. Expected in the baseline: a −133,756.51 difference on Expenses › Amazon fees.
 - In the payments config, all rules for a given (transaction_type, description) share one `record_ref` template. So `record_ref` belongs to the line as a whole, not to each amount column.
 - The payments config has exactly two duplicated rules, where two rules route the same amount column: `ORDER/any/low_value_goods` and `ORDER/any/sales_tax_collected`. The settlement config has none.
 

@@ -7,6 +7,8 @@ import (
 	"io"
 	"slices"
 	"strings"
+
+	"amazonrecon/internal/textfile"
 )
 
 // settlementHeader is the exact header row of the settlement report (line 1).
@@ -31,11 +33,11 @@ type SettlementReport struct {
 func ReadSettlement(r io.Reader) (SettlementReport, error) {
 	br := bufio.NewReader(r)
 	var out SettlementReport
-	if err := skipBOM(br); err != nil {
+	if err := textfile.SkipBOM(br); err != nil {
 		return out, err
 	}
 
-	text, ok, err := readLine(br)
+	text, ok, err := textfile.ReadLine(br)
 	if err != nil {
 		return out, err
 	}
@@ -50,7 +52,7 @@ func ReadSettlement(r io.Reader) (SettlementReport, error) {
 	var headers []Line
 	lineNo := 1
 	for {
-		text, ok, err := readLine(br)
+		text, ok, err := textfile.ReadLine(br)
 		if err != nil {
 			return out, err
 		}
@@ -106,11 +108,8 @@ func parseSettlementHeader(lineNo int, raw map[string]string) (Line, error) {
 	if raw["settlement-id"] == "" {
 		return Line{}, errors.New("settlement-id is empty")
 	}
-	total, err := parsePlainAmount(raw["total-amount"])
+	total, err := parseSettlementAmount(raw["total-amount"])
 	if err != nil {
-		return Line{}, fmt.Errorf("total-amount: %w", err)
-	}
-	if _, err := checkTwoDecimals(total, raw["total-amount"]); err != nil {
 		return Line{}, fmt.Errorf("total-amount: %w", err)
 	}
 	start, err := parseUTCStamp(raw["settlement-start-date"])
@@ -143,11 +142,8 @@ func parseSettlementComponent(lineNo int, raw map[string]string) (Line, error) {
 	if raw["settlement-id"] == "" {
 		return Line{}, errors.New("settlement-id is empty")
 	}
-	amount, err := parsePlainAmount(raw["amount"])
+	amount, err := parseSettlementAmount(raw["amount"])
 	if err != nil {
-		return Line{}, fmt.Errorf("amount: %w", err)
-	}
-	if _, err := checkTwoDecimals(amount, raw["amount"]); err != nil {
 		return Line{}, fmt.Errorf("amount: %w", err)
 	}
 	posted, err := parseDottedDate(raw["posted-date"])

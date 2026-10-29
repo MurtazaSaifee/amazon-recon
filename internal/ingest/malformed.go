@@ -29,25 +29,12 @@ func malformedLines(fileName string, errs []source.ParseError, headerID string) 
 	return out
 }
 
-// scopeOfMalformed applies the same scope rules as scopedRow, to the cells a malformed line still has.
-// It returns the scope reason, and unknown when a cell needed for the decision is unreadable.
+// scopeOfMalformed applies the same scope decision as a parsed line, to the cells a malformed line
+// still has. It returns the scope reason, and unknown when a cell needed for the decision is unreadable.
 func scopeOfMalformed(e source.ParseError, headerID string) (inScope bool, reason string, unknown bool) {
-	switch {
-	case e.SettlementID == "":
-		return true, "scope unknown: settlement ID unreadable", true
-	case e.SettlementID != headerID:
-		return false, "Other settlement", false
-	case e.Source == source.Settlement:
-		return true, "Settlement component", false
-	case e.Status == "":
-		return true, "scope unknown: status unreadable", true
-	case e.Status == "Released":
-		return true, "Released", false
-	case e.Status == "Deferred":
-		return false, "Deferred", false
-	default:
-		return false, "Status " + e.Status, false
-	}
+	return source.Scope(headerID, source.ScopeCells{
+		Source: e.Source, SettlementID: e.SettlementID, Status: e.Status,
+	})
 }
 
 // blockingCount counts the malformed lines in scope, which are the ones that fail a run.

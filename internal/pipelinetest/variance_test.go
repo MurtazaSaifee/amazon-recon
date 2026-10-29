@@ -11,7 +11,7 @@ import (
 // (see summary_test.go). Payments line 11 is Order A: product 1000.00, tax 234.56, routed to
 // Product Charges by P-002 and to Tax by P-003 and P-004 (the duplicate). Settlement line 4 is its
 // Tax component, routed by S-003. Payments line 13 is the refund of B, routed to Refunded sales by
-// P-006. Payments line 15 is the Transfer, routed by the type-and-any rule P-009.
+// P-006. Payments line 15 is the Transfer, matched by its prefix rule P-008, which is not summarised.
 
 // varianceRow is one row of v_line_variance: a rule, its source, its amount and its line count.
 type varianceRow struct {
@@ -49,10 +49,9 @@ func TestLineVarianceView(t *testing.T) {
 		assertVariance(t, got, want)
 	})
 
-	t.Run("a routed field with no Summary line is blank on group and line", func(t *testing.T) {
-		got := lineVariance(t, ctx, pool, res.RunID, "summary_field = 'bank_account_transfer_round_off'")
-		want := []varianceRow{{"P-009", "payments", "TRANSFER / any", "-1000.00", 1}}
-		assertVariance(t, got, want)
+	t.Run("the Transfer matches its prefix rule, so the Catch-all routes nothing", func(t *testing.T) {
+		got := lineVariance(t, ctx, pool, res.RunID, "rule_id = 'P-009'")
+		assertVariance(t, got, nil)
 	})
 }
 

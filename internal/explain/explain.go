@@ -13,7 +13,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
-	"amazonrecon/internal/report"
+	"amazonrecon/internal/money"
+	"amazonrecon/internal/source"
+	"amazonrecon/internal/store"
 )
 
 // TopRecords is how many record_refs an explanation lists, by absolute difference.
@@ -86,7 +88,7 @@ func Load(ctx context.Context, pool *pgxpool.Pool, runID int64, line Line) (Expl
 		return Explanation{}, fmt.Errorf("find Summary line: %w", err)
 	}
 
-	rows, err := pool.Query(ctx, `SELECT source, rule_id, rule_label, amount_field, line_count, amount::text
+	rows, err := pool.Query(ctx, `SELECT source, rule_id, rule_label, amount_field, line_count, amount
 		FROM v_line_variance WHERE run_id = $1 AND summary_group = $2 AND summary_line = $3
 		ORDER BY source, rule_id`, runID, line.Group, line.Name)
 	if err != nil {
@@ -95,16 +97,14 @@ func Load(ctx context.Context, pool *pgxpool.Pool, runID int64, line Line) (Expl
 	defer rows.Close()
 	payments, settlements := decimal.Zero, decimal.Zero
 	for rows.Next() {
-		var source string
+		var side string
 		var r RuleAmount
-		var amount string
-		if err := rows.Scan(&source, &r.RuleID, &r.Label, &r.AmountField, &r.Lines, &amount); err != nil {
+		var amount store.Amount
+		if err := rows.Scan(&side, &r.RuleID, &r.Label, &r.AmountField, &r.Lines, &amount); err != nil {
 			return Explanation{}, err
 		}
-		if r.Amount, err = decimal.NewFromString(amount); err != nil {
-			return Explanation{}, err
-		}
-		if source == "payments" {
+		r.Amount = amount.Decimal
+		if side == source.Payments {
 			e.PaymentRules = append(e.PaymentRules, r)
 			payments = payments.Add(r.Amount)
 		} else {
@@ -126,7 +126,7 @@ func Load(ctx context.Context, pool *pgxpool.Pool, runID int64, line Line) (Expl
 
 // loadRecords reads the record_refs with a difference on the line, largest first, and the source lines behind each.
 func loadRecords(ctx context.Context, pool *pgxpool.Pool, e *Explanation) error {
-	rows, err := pool.Query(ctx, `SELECT record_ref, payments::text, settlements::text, difference::text
+	rows, err := pool.Query(ctx, `SELECT record_ref, payments, settlements, difference
 		FROM v_record_variance
 		WHERE run_id = $1 AND summary_group = $2 AND summary_line = $3 AND difference <> 0
 		ORDER BY abs(difference) DESC, record_ref
@@ -136,20 +136,12 @@ func loadRecords(ctx context.Context, pool *pgxpool.Pool, e *Explanation) error 
 	}
 	for rows.Next() {
 		var rec RecordVariance
-		var p, s, d string
+		var p, s, d store.Amount
 		if err := rows.Scan(&rec.RecordRef, &p, &s, &d); err != nil {
 			rows.Close()
-			return err
+			return fmt.Errorf("scan record variance: %w", err)
 		}
-		for _, v := range []struct {
-			text string
-			dst  *decimal.Decimal
-		}{{p, &rec.Payments}, {s, &rec.Settlements}, {d, &rec.Difference}} {
-			if *v.dst, err = decimal.NewFromString(v.text); err != nil {
-				rows.Close()
-				return err
-			}
-		}
+		rec.Payments, rec.Settlements, rec.Difference = p.Decimal, s.Decimal, d.Decimal
 		e.Records = append(e.Records, rec)
 	}
 	rows.Close()
@@ -162,8 +154,8 @@ func loadRecords(ctx context.Context, pool *pgxpool.Pool, e *Explanation) error 
 		if err != nil {
 			return err
 		}
-		e.Records[i].PaymentsLines = lines["payments"]
-		e.Records[i].SettlementLines = lines["settlement"]
+		e.Records[i].PaymentsLines = lines[source.Payments]
+		e.Records[i].SettlementLines = lines[source.Settlement]
 	}
 	return nil
 }
@@ -181,12 +173,12 @@ func sourceLines(ctx context.Context, pool *pgxpool.Pool, runID int64, field, re
 	defer rows.Close()
 	out := map[string][]SourceLine{}
 	for rows.Next() {
-		var source string
+		var side string
 		var l SourceLine
-		if err := rows.Scan(&source, &l.FileName, &l.LineNumber); err != nil {
+		if err := rows.Scan(&side, &l.FileName, &l.LineNumber); err != nil {
 			return nil, err
 		}
-		out[source] = append(out[source], l)
+		out[side] = append(out[side], l)
 	}
 	return out, rows.Err()
 }
@@ -202,9 +194,9 @@ func Format(e Explanation) string {
 	fmt.Fprintf(&b, "%s / %s  (Summary field %s, run %d)\n\n", e.Line.Group, e.Line.Name, field, e.RunID)
 
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(tw, "Payments\t%s\n", report.FormatAmount(e.Payments))
-	fmt.Fprintf(tw, "Settlements\t%s\n", report.FormatAmount(e.Settlements))
-	fmt.Fprintf(tw, "Variance\t%s\n", report.FormatAmount(e.Variance))
+	fmt.Fprintf(tw, "Payments\t%s\n", money.Format(e.Payments))
+	fmt.Fprintf(tw, "Settlements\t%s\n", money.Format(e.Settlements))
+	fmt.Fprintf(tw, "Variance\t%s\n", money.Format(e.Variance))
 	tw.Flush()
 
 	b.WriteString("\nContributions by rule\n")
@@ -221,7 +213,7 @@ func Format(e Explanation) string {
 	for i, r := range e.Records {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, r.RecordRef)
 		fmt.Fprintf(&b, "   difference %s (payments %s, settlements %s)\n",
-			report.FormatAmount(r.Difference), report.FormatAmount(r.Payments), report.FormatAmount(r.Settlements))
+			money.Format(r.Difference), money.Format(r.Payments), money.Format(r.Settlements))
 		fmt.Fprintf(&b, "   payments lines:    %s\n", formatLines(r.PaymentsLines))
 		fmt.Fprintf(&b, "   settlement lines:  %s\n", formatLines(r.SettlementLines))
 	}
@@ -235,7 +227,7 @@ func writeRules(tw *tabwriter.Writer, side string, rules []RuleAmount) {
 	}
 	for _, r := range rules {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\n", side, r.RuleID, r.Label, r.AmountField,
-			report.FormatAmount(r.Amount), r.Lines)
+			money.Format(r.Amount), r.Lines)
 		side = ""
 	}
 }

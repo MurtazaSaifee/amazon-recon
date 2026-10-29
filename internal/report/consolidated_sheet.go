@@ -7,15 +7,16 @@ import (
 	"github.com/xuri/excelize/v2"
 
 	"amazonrecon/internal/recon"
+	"amazonrecon/internal/source"
 )
 
 // ConsolidatedSheet is the name of the sheet with one row per record_ref.
 const ConsolidatedSheet = "Consolidated Data"
 
-const (
-	consolidatedHeaderRow = 10 // the column headers, as in the sample
-	consolidatedFirstRow  = 11
-)
+// ConsolidatedHeaderRow is the 1-based row of the Consolidated Data column headers, as in the sample.
+const ConsolidatedHeaderRow = 10
+
+const consolidatedFirstRow = 11
 
 // dateKey marks the Date column, which holds the posted date (UTC) of the record rather than a raw cell.
 const dateKey = "@posted"
@@ -151,14 +152,37 @@ func writeConsolidated(f *excelize.File, r recon.Report, bold, money int) error 
 		return w.err
 	}
 	last := row - 1
-	if err := f.AutoFilter(ConsolidatedSheet, "A"+strconv.Itoa(consolidatedHeaderRow)+":"+
-		colName(c.setLines)+strconv.Itoa(max(last, consolidatedHeaderRow)), nil); err != nil {
+	if err := f.AutoFilter(ConsolidatedSheet, "A"+strconv.Itoa(ConsolidatedHeaderRow)+":"+
+		colName(c.setLines)+strconv.Itoa(max(last, ConsolidatedHeaderRow)), nil); err != nil {
 		return err
 	}
 	return f.SetPanes(ConsolidatedSheet, &excelize.Panes{
-		Freeze: true, XSplit: 1, YSplit: consolidatedHeaderRow, TopLeftCell: "B" + strconv.Itoa(consolidatedFirstRow),
+		Freeze: true, XSplit: 1, YSplit: ConsolidatedHeaderRow, TopLeftCell: "B" + strconv.Itoa(consolidatedFirstRow),
 		ActivePane: "bottomRight",
 	})
+}
+
+// sampleHeaders spells the Summary-line headers of the Consolidated Data sheet as the sample workbook
+// does. The Summary sheet keeps the spelling of the Summary-line map; only these headers differ. Keyed by
+// group and line.
+var sampleHeaders = map[string]string{
+	"Sales/Amazon fees":                      "Amazon Fees",
+	"Sales/Cross-account Debt Adjustment":    "Cross-Account Debt Adjustment",
+	"Refunds/Refund expenses":                "Refund Expenses",
+	"Refunds/Refunded sales":                 "Refunded Sales",
+	"Expenses/Promo rebates":                 "Promo Rebates",
+	"Expenses/FBA fees":                      "FBA Fees",
+	"Expenses/Amazon fees":                   "Amazon Fees",
+	"Expenses/Cross-account Debt Adjustment": "Cross-Account Debt Adjustment",
+}
+
+// headerText is the Consolidated header of a slot: the sample's spelling where the sample has one,
+// otherwise the slot's own label.
+func headerText(s slot) string {
+	if h, ok := sampleHeaders[s.group+"/"+s.label]; ok {
+		return h
+	}
+	return s.label
 }
 
 // summarySlots makes one slot per Summary line, in display order.
@@ -182,28 +206,28 @@ func unmappedSlots(fields []recon.FieldTotal) []slot {
 // header writes the column headers of every block on the header row.
 func (w *sheetWriter) header(c consolidatedCols, summary, unmapped []slot, bold int) {
 	for i, col := range paymentsColumns {
-		w.text(consolidatedHeaderRow, colName(c.payDesc+i), col.header, bold)
+		w.text(ConsolidatedHeaderRow, colName(c.payDesc+i), col.header, bold)
 	}
-	w.text(consolidatedHeaderRow, colName(c.payTotal), "Total", bold)
+	w.text(ConsolidatedHeaderRow, colName(c.payTotal), "Total", bold)
 	for i, col := range settlementColumns {
-		w.text(consolidatedHeaderRow, colName(c.setDesc+i), col.header, bold)
+		w.text(ConsolidatedHeaderRow, colName(c.setDesc+i), col.header, bold)
 	}
-	w.text(consolidatedHeaderRow, colName(c.setTotal), "Total", bold)
-	w.text(consolidatedHeaderRow, colName(c.status), "Reconciliation Status", bold)
-	w.text(consolidatedHeaderRow, colName(c.totalDiff), "total (DS1-DS2)", bold)
-	w.text(consolidatedHeaderRow, colName(c.ref), "record_ref", bold)
-	w.text(consolidatedHeaderRow, colName(c.payLines), "Payments source lines", bold)
-	w.text(consolidatedHeaderRow, colName(c.setLines), "Settlement source lines", bold)
+	w.text(ConsolidatedHeaderRow, colName(c.setTotal), "Total", bold)
+	w.text(ConsolidatedHeaderRow, colName(c.status), "Reconciliation Status", bold)
+	w.text(ConsolidatedHeaderRow, colName(c.totalDiff), "total (DS1-DS2)", bold)
+	w.text(ConsolidatedHeaderRow, colName(c.ref), "record_ref", bold)
+	w.text(ConsolidatedHeaderRow, colName(c.payLines), "Payments source lines", bold)
+	w.text(ConsolidatedHeaderRow, colName(c.setLines), "Settlement source lines", bold)
 	for i, s := range summary {
-		w.text(consolidatedHeaderRow, colName(c.paySum+i), s.label, bold)
-		w.text(consolidatedHeaderRow, colName(c.setSum+i), s.label, bold)
+		w.text(ConsolidatedHeaderRow, colName(c.paySum+i), headerText(s), bold)
+		w.text(ConsolidatedHeaderRow, colName(c.setSum+i), headerText(s), bold)
 	}
 	for i, s := range unmapped {
-		w.text(consolidatedHeaderRow, colName(c.payUnm+i), s.label, bold)
-		w.text(consolidatedHeaderRow, colName(c.setUnm+i), s.label, bold)
+		w.text(ConsolidatedHeaderRow, colName(c.payUnm+i), headerText(s), bold)
+		w.text(ConsolidatedHeaderRow, colName(c.setUnm+i), headerText(s), bold)
 	}
 	for i, s := range append(append([]slot{}, summary...), unmapped...) {
-		w.text(consolidatedHeaderRow, colName(c.diff+i), s.label+" (DS1-DS2)", bold)
+		w.text(ConsolidatedHeaderRow, colName(c.diff+i), headerText(s)+" (DS1-DS2)", bold)
 	}
 }
 
@@ -224,7 +248,7 @@ func writeRecordRow(w *sheetWriter, c consolidatedCols, row int, rec recon.Recor
 	writeRouted(w, row, c.setSum, summary, rec.Settlements, money)
 	writeRouted(w, row, c.setUnm, unmapped, rec.Settlements, money)
 
-	w.text(row, colName(c.status), string(rec.Status), 0)
+	w.text(row, colName(c.status), rec.Status.Label(), 0)
 	w.number(row, colName(c.totalDiff), rec.Difference, money)
 	for i, s := range append(append([]slot{}, summary...), unmapped...) {
 		if s.field == "" {
@@ -240,8 +264,8 @@ func writeRecordRow(w *sheetWriter, c consolidatedCols, row int, rec recon.Recor
 
 // writeUnmappedRow writes one unmapped line on its own row, on its own side's columns.
 func writeUnmappedRow(w *sheetWriter, c consolidatedCols, row int, u recon.ListedLine, money int) {
-	w.text(row, colName(c.status), "Unmapped", 0)
-	if u.Source == "payments" {
+	w.text(row, colName(c.status), source.ReasonUnmapped, 0)
+	if u.Source == source.Payments {
 		writeDescriptive(w, c.payDesc, row, paymentsColumns, u.Raw, u.PostedDate, true)
 		w.number(row, colName(c.payTotal), u.Amount, money)
 		w.text(row, colName(c.payLines), strconv.Itoa(u.LineNumber), 0)

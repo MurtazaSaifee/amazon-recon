@@ -19,17 +19,22 @@ import (
 	"fmt"
 	neturl "net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
 	"amazonrecon/internal/explain"
 	"amazonrecon/internal/ingest"
+	"amazonrecon/internal/money"
 	"amazonrecon/internal/recon"
 	"amazonrecon/internal/report"
+	"amazonrecon/internal/source"
 	"amazonrecon/internal/store"
+	"amazonrecon/internal/timefmt"
 )
 
 const usage = `usage:
@@ -43,35 +48,44 @@ const usage = `usage:
 `
 
 func main() {
-	if len(os.Args) < 2 {
+	os.Exit(run(os.Args))
+}
+
+// run dispatches one command and returns the process exit code. Ctrl-C and SIGTERM cancel the
+// context, so a database call in progress stops and the connection pool is released.
+func run(args []string) int {
+	if len(args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+		return 2
 	}
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	var err error
-	switch os.Args[1] {
+	switch args[1] {
 	case "migrate":
-		err = cmdMigrate(ctx, os.Args[2:])
+		err = cmdMigrate(ctx, args[2:])
 	case "seed-config":
-		err = cmdSeedConfig(ctx, os.Args[2:])
+		err = cmdSeedConfig(ctx, args[2:])
 	case "ingest":
-		err = cmdIngest(ctx, os.Args[2:])
+		err = cmdIngest(ctx, args[2:])
 	case "apply-fixes":
-		err = cmdApplyFixes(ctx, os.Args[2:])
+		err = cmdApplyFixes(ctx, args[2:])
 	case "report":
-		err = cmdReport(ctx, os.Args[2:])
+		err = cmdReport(ctx, args[2:])
 	case "explain":
-		err = cmdExplain(ctx, os.Args[2:])
+		err = cmdExplain(ctx, args[2:])
 	case "counts":
-		err = cmdCounts(ctx, os.Args[2:])
+		err = cmdCounts(ctx, args[2:])
 	default:
 		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+		return 2
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "recon:", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func dbFlag(fs *flag.FlagSet) *string {
@@ -214,10 +228,14 @@ func cmdApplyFixes(ctx context.Context, args []string) error {
 	}
 	defer pool.Close()
 
-	if err := store.ApplyFixes(ctx, pool, string(sql)); err != nil {
+	results, err := store.ApplyFixes(ctx, pool, string(sql))
+	if err != nil {
 		return err
 	}
-	fmt.Printf("applied %s in one transaction\n", *file)
+	for _, r := range results {
+		fmt.Printf("  statement %d: %d row(s) changed: %s\n", r.Number, r.RowsAffected, r.Head)
+	}
+	fmt.Printf("applied %s in one transaction: %d statement(s)\n", *file, len(results))
 	return nil
 }
 
@@ -301,42 +319,43 @@ func cmdCounts(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("Run %d, Settlement %s\n", rep.RunID, rep.Settlement.ID)
-	printCounts(rep.Reconciliation.Counts)
+	printCounts(rep.Reconciliation)
 	return nil
 }
 
-func printCounts(c recon.Counts) {
+func printCounts(r recon.Reconciliation) {
 	fmt.Println("Reconciliation counts (record_refs):")
-	fmt.Printf("  %-28s %6d\n", "Reconciled", c.Reconciled)
-	fmt.Printf("  %-28s %6d\n", "Reconciled with difference", c.ReconciledWithDifference)
-	fmt.Printf("  %-28s %6d\n", "Unreconciled payment", c.UnreconciledPayment)
-	fmt.Printf("  %-28s %6d\n", "Unreconciled settlement", c.UnreconciledSettlement)
+	for _, s := range recon.Statuses {
+		fmt.Printf("  %-28s %6d\n", s.Label(), r.Counts[s])
+	}
 	fmt.Printf("  %-28s %6d lines (payments %d, settlements %d; no record_ref)\n", "Unmapped",
-		c.UnmappedPayments+c.UnmappedSettlements, c.UnmappedPayments, c.UnmappedSettlements)
+		r.UnmappedTotal(), r.UnmappedLines[source.Payments], r.UnmappedLines[source.Settlement])
 }
 
 func printTieOut(r recon.Report, out string) {
 	fmt.Printf("Run %d, Settlement %s (period %s to %s UTC, deposit %s UTC)\n", r.RunID, r.Settlement.ID,
-		r.Settlement.PeriodStart.Format("2006-01-02"), r.Settlement.PeriodEnd.Format("2006-01-02"),
-		r.Settlement.DepositDate.Format("2006-01-02"))
+		timefmt.Date(r.Settlement.PeriodStart), timefmt.Date(r.Settlement.PeriodEnd),
+		timefmt.Date(r.Settlement.DepositDate))
 	amount := func(label string, d decimal.Decimal) {
-		fmt.Printf("  %-56s %18s\n", label, report.FormatAmount(d))
+		fmt.Printf("  %-56s %18s\n", label, money.Format(d))
 	}
 	total := func(label string, t recon.Total) {
 		unit := "lines"
 		if t.Count == 1 {
 			unit = "line"
 		}
-		fmt.Printf("  %-56s %18s   %6d %s\n", label, report.FormatAmount(t.Amount), t.Count, unit)
+		fmt.Printf("  %-56s %18s   %6d %s\n", label, money.Format(t.Amount), t.Count, unit)
 	}
-	printCounts(r.Reconciliation.Counts)
+	printCounts(r.Reconciliation)
 	amount("Settlement total (Settlement report header)", r.Settlement.Total)
 	total("In-scope Components", r.Components)
 	amount("  minus Settlement total (should be 0.00)", r.ComponentsMinusTotal)
-	total("In-scope transaction lines (Released, incl. Transfer)", r.TransactionsInScope)
-	total("  of which Transfer", r.Transfers)
-	total("In-scope Released excluding Transfer", r.ReleasedExcludingTransfer)
-	amount("  minus Settlement total (should be 0.00)", r.ExcludingTransferMinusTotal)
+	total("In-scope transaction lines (Released)", r.TransactionsInScope)
+	total("  of which Unreconciled payments", r.TieOut.Payments.Unreconciled)
+	amount("In-scope Released excluding Unreconciled payments", r.ReleasedExcludingUnreconciled)
+	amount("  minus Settlement total (should be 0.00)", r.ReleasedExcludingUnreconciledMinusTotal)
+	amount("Payments unexplained difference (should be 0.00)", r.TieOut.Payments.Unexplained)
+	amount("Settlements unexplained difference (should be 0.00)", r.TieOut.Settlements.Unexplained)
 	total("Deferred memo (out of scope)", r.Deferred)
 	fmt.Printf("Workbook: %s\n", out)
 }
