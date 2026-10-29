@@ -284,14 +284,16 @@ func TestSummarySheetFormulasKeepValues(t *testing.T) {
 	defer f.Close()
 
 	const sheet = "Summary"
-	signNote := false
+	signNote := ""
 	for row := 1; row <= 200; row++ {
 		if v, _ := f.GetCellValue(sheet, fmt.Sprintf("B%d", row)); strings.Contains(v, "signs are kept") {
-			signNote = true
+			signNote = v
 		}
 	}
-	if !signNote {
+	if signNote == "" {
 		t.Error("the Summary sheet has no note that source signs are kept")
+	} else if !strings.HasSuffix(signNote, "The last column is Payments - Settlements.") {
+		t.Errorf("the sign note ends %q, want its last sentence to name the last column Payments - Settlements", signNote)
 	}
 	checkFormulaCell(t, f, sheet, "Sales", "C", "1494.12")
 	checkFormulaCell(t, f, sheet, "Sales", "D", "1259.56")

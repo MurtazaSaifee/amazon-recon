@@ -16,7 +16,7 @@ const SummarySheet = "Summary"
 // summaryNote is printed on the sheet. Source signs are kept, so the reader is told how to read them.
 const summaryNote = "Source signs are kept: expenses and refunds are negative, as the reports give them. " +
 	"Payments are Transaction lines only and Settlements are Components only. " +
-	"The last column is Payments minus Settlements."
+	"The last column is Payments - Settlements."
 
 // The row layout of the Summary block, taken from the sample workbook. The column headers are in row 1.
 // The first group starts two blank rows below them. Each later group starts one blank row below the
