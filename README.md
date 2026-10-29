@@ -4,6 +4,22 @@ Reads an Amazon Payments report and a Settlement report, maps every line to a Su
 
 No LLM is in the money path. All money is `NUMERIC(14,2)` in PostgreSQL and `shopspring/decimal` in Go.
 
+## What I found (step 5)
+
+The Baseline, with every interpretation switch off, had eight non-zero lines: seven Summary lines and one field with no Summary line. They have five root causes, one row per cause.
+
+| Summary line | Baseline Variance | Root cause | Fix (kind) | After |
+|---|---:|---|---|---|
+| Expenses › Amazon fees | -133,756.51 | The Transfer's description carries account digits, so P-063 misses it and Catch-all P-110 sends it to Amazon fees | Interpretation switch `prefix_before_catch_all`; P-063 unchanged | 0.00 (the Transfer is shown on the Tie-out) |
+| Expenses › Promo rebates; Expenses › Other | +11,273.53; -11,273.53 | P-065 routes ORDER promotional rebates to Other; the settlement routes the same promotions to Promo rebates | Mapping defect: P-065 to Promo rebates | 0.00; 0.00 |
+| Sales › Shipping; Sales › Product Charges; Sales › Other | +13,572.17; -92.84; -11.97 | Duplicate rules P-005 and P-072 double-count 13,478.97, and one payments tax column cannot split across four settlement components | Mapping defect: delete P-005 and P-072. Schema limitation plus policy: all sales tax to Sales › Tax | 0.00; 0.00; 0.00 |
+| Refunds › Refund expenses | +42.59 | P-014 (refund tax) has no Summary field, and the settlement sends the same tax to Refund expenses | Accounting-policy call: refund tax to Sales › Tax (P-014, S-004, S-011, S-020) | 0.00 |
+| No Summary line (`sales_gift_wrap_credits`) | +11.61 | P-070 routes gift wrap to a field with no Summary line | Mapping defect: P-070 to Sales › Other | 0.00 (Sales › Other 11.61 on both sides) |
+
+The Summary then tied, and "the two columns agree" was treated as necessary, not sufficient: pass B audited the meaning of every rule that fires. It applied P1 (the FBA fulfilment fee moved from Amazon fees to FBA fees on both sides, -96,803.17), an accounting-policy call the author decided, and six objective latent defects (O1–O6) that do not fire in this settlement.
+
+The 26 unreconciled payments cannot be closed: the Transfer (-133,756.51) is a bank payout, not P&L, so it is shown on the Tie-out, and the 25 zero-value Order lines have no settlement row to pair with.
+
 ## Quick start
 
 **Prerequisites:** Go 1.27, and either Docker or any PostgreSQL 17.
