@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/xuri/excelize/v2"
 
-	"amazonrecon/internal/ingest"
 	"amazonrecon/internal/recon"
 	"amazonrecon/internal/report"
 	"amazonrecon/internal/source"
@@ -59,7 +58,7 @@ var consolidatedHeaders = map[string]string{
 func TestReconciliationOutcomes(t *testing.T) {
 	ctx := context.Background()
 	pool := newPipelineDB(t)
-	res := ingestReconFixtures(t, pool)
+	res := ingestFiles(t, pool, reconPaymentsFile, reconSettlementFile)
 	rep, err := recon.Build(ctx, pool, res.RunID)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -165,7 +164,7 @@ func TestConsolidatedAndOutOfScopeSheets(t *testing.T) {
 	ctx := context.Background()
 	pool := newPipelineDB(t)
 	routeTransferToUnmappedField(t, pool)
-	res := ingestReconFixtures(t, pool)
+	res := ingestFiles(t, pool, reconPaymentsFile, reconSettlementFile)
 	rep, err := recon.Build(ctx, pool, res.RunID)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
@@ -190,7 +189,7 @@ func TestConsolidatedAndOutOfScopeSheets(t *testing.T) {
 
 	t.Run("Consolidated Data follows the sample's column order", func(t *testing.T) {
 		rows := sheetRows(t, f, "Consolidated Data")
-		header := rows[consolidatedHeaderRow-1]
+		header := rows[report.ConsolidatedHeaderRow-1]
 		for col, want := range consolidatedHeaders {
 			if got := cellAt(header, col); got != want {
 				t.Errorf("header %s = %q, want %q", col, got, want)
@@ -268,9 +267,6 @@ func TestConsolidatedAndOutOfScopeSheets(t *testing.T) {
 	})
 }
 
-// consolidatedHeaderRow is the 1-based row of the Consolidated Data column headers.
-const consolidatedHeaderRow = 10
-
 // routeTransferToUnmappedField routes the Transfer's rule (P-008) to a Summary field with no Summary
 // line, the way a mapping fix would. The Consolidated sheet then has a column for that field.
 // It must run after seeding and before ingesting.
@@ -282,18 +278,6 @@ func routeTransferToUnmappedField(t *testing.T, pool *pgxpool.Pool) {
 		WHERE rule_id = 'P-008';`); err != nil {
 		t.Fatalf("route the Transfer to an unmapped field: %v", err)
 	}
-}
-
-func ingestReconFixtures(t *testing.T, pool *pgxpool.Pool) ingest.Result {
-	t.Helper()
-	res, err := ingest.Run(context.Background(), pool, ingest.Inputs{
-		PaymentsPath:   filepath.Join(fixtures, "reconciliation_payments.csv"),
-		SettlementPath: filepath.Join(fixtures, "reconciliation_settlement.txt"),
-	})
-	if err != nil {
-		t.Fatalf("ingest reconciliation fixtures: %v", err)
-	}
-	return res
 }
 
 func findRecord(t *testing.T, r recon.Reconciliation, ref string) recon.RecordRow {

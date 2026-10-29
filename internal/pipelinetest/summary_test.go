@@ -76,7 +76,7 @@ func TestSummaryDuringIngestion(t *testing.T) {
 
 	t.Run("a settlement component with an unknown type is an Unmapped routing gap", func(t *testing.T) {
 		assertGap(t, rep.TieOut.Settlements, "Unmapped", "-10.00")
-		assertLoaded(t, ctx, pool, res.RunID, "settlement", setRefundUnmap, func(l store.Line) {
+		assertLine(t, ctx, pool, res.RunID, "settlement", setRefundUnmap, func(l store.Line) {
 			if l.RecordRef != "" || len(l.MatchedRuleIDs) != 0 {
 				t.Errorf("unmapped component record_ref %q rules %v, want none", l.RecordRef, l.MatchedRuleIDs)
 			}
@@ -120,17 +120,17 @@ func TestSummaryDuringIngestion(t *testing.T) {
 	})
 
 	t.Run("out-of-scope and in-scope lines keep their record_ref and matched rules", func(t *testing.T) {
-		assertLoaded(t, ctx, pool, res.RunID, "payments", pmtTransfer, func(l store.Line) {
+		assertLine(t, ctx, pool, res.RunID, "payments", pmtTransfer, func(l store.Line) {
 			if want := "TRANSFER|To account ending with: 999|12000000001|2026-07-05"; l.RecordRef != want {
 				t.Errorf("transfer record_ref = %q, want %q", l.RecordRef, want)
 			}
 		})
-		assertLoaded(t, ctx, pool, res.RunID, "payments", pmtRefund, func(l store.Line) {
+		assertLine(t, ctx, pool, res.RunID, "payments", pmtRefund, func(l store.Line) {
 			if l.RecordRef != "701-0000002-0000002|SYN-B-002|2026-07-04" {
 				t.Errorf("refund record_ref = %q", l.RecordRef)
 			}
 		})
-		assertLoaded(t, ctx, pool, res.RunID, "payments", pmtDeferred, func(l store.Line) {
+		assertLine(t, ctx, pool, res.RunID, "payments", pmtDeferred, func(l store.Line) {
 			if l.RecordRef != "701-0000005-0000005|SYN-D-004|2026-07-09" {
 				t.Errorf("deferred record_ref = %q", l.RecordRef)
 			}
@@ -303,20 +303,11 @@ func assertGap(t *testing.T, side recon.TieOutSide, rule, want string) {
 
 func assertMatched(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID int64, source string, lineNumber int, want []string) {
 	t.Helper()
-	assertLoaded(t, ctx, pool, runID, source, lineNumber, func(l store.Line) {
+	assertLine(t, ctx, pool, runID, source, lineNumber, func(l store.Line) {
 		if fmt.Sprint(l.MatchedRuleIDs) != fmt.Sprint(want) {
 			t.Errorf("%s line %d matched rules = %v, want %v", source, lineNumber, l.MatchedRuleIDs, want)
 		}
 	})
-}
-
-func assertLoaded(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID int64, source string, lineNumber int, check func(store.Line)) {
-	t.Helper()
-	l, err := store.LoadLine(ctx, pool, runID, source, lineNumber)
-	if err != nil {
-		t.Fatalf("load %s line %d: %v", source, lineNumber, err)
-	}
-	check(l)
 }
 
 func hasWarning(ws []string, kind mapping.WarningKind) bool {
@@ -326,40 +317,6 @@ func hasWarning(ws []string, kind mapping.WarningKind) bool {
 		}
 	}
 	return false
-}
-
-// checkValue finds the row labelled label in column B and compares the raw value of col.
-func checkValue(t *testing.T, f *excelize.File, sheet, label, col, want string) {
-	t.Helper()
-	row := findLabel(t, f, sheet, label)
-	got, err := f.GetCellValue(sheet, fmt.Sprintf("%s%d", col, row), excelize.Options{RawCellValue: true})
-	if err != nil {
-		t.Fatalf("read %s%d: %v", col, row, err)
-	}
-	if got != want {
-		t.Errorf("%q column %s = %q, want %q", label, col, got, want)
-	}
-}
-
-// checkFormulaCell checks that the cell holds a formula and that its stored value is want.
-func checkFormulaCell(t *testing.T, f *excelize.File, sheet, label, col, want string) {
-	t.Helper()
-	row := findLabel(t, f, sheet, label)
-	cell := fmt.Sprintf("%s%d", col, row)
-	formula, err := f.GetCellFormula(sheet, cell)
-	if err != nil {
-		t.Fatalf("formula %s: %v", cell, err)
-	}
-	if formula == "" {
-		t.Errorf("%q %s has no formula", label, cell)
-	}
-	value, err := f.GetCellValue(sheet, cell, excelize.Options{RawCellValue: true})
-	if err != nil {
-		t.Fatalf("value %s: %v", cell, err)
-	}
-	if value != want {
-		t.Errorf("%q %s stored value = %q, want %q (formula %q)", label, cell, value, want, formula)
-	}
 }
 
 // routingGapRows returns the routing-gap rows of a sheet as "label|payments|settlements", raw values.
@@ -379,19 +336,4 @@ func routingGapRows(t *testing.T, f *excelize.File, sheet string) []string {
 		out = append(out, label+"|"+p+"|"+s)
 	}
 	return out
-}
-
-func findLabel(t *testing.T, f *excelize.File, sheet, label string) int {
-	t.Helper()
-	for row := 1; row <= 80; row++ {
-		v, err := f.GetCellValue(sheet, fmt.Sprintf("B%d", row))
-		if err != nil {
-			t.Fatalf("read B%d: %v", row, err)
-		}
-		if strings.TrimSpace(v) == label {
-			return row
-		}
-	}
-	t.Fatalf("sheet %s has no row labelled %q", sheet, label)
-	return 0
 }

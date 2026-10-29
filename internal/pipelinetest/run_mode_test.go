@@ -17,34 +17,6 @@ import (
 	"amazonrecon/internal/report"
 )
 
-// checkSheetCell finds the row labelled label on the named sheet and checks the cell in col of
-// that row. Labels sit in column B on the Summary sheet and column A on the Tie-out sheet.
-func checkSheetCell(t *testing.T, f *excelize.File, sheet, label, col, want string) {
-	t.Helper()
-	rows, err := f.GetRows(sheet, excelize.Options{RawCellValue: true})
-	if err != nil {
-		t.Fatalf("read %s: %v", sheet, err)
-	}
-	labelCol := 0 // Tie-out: column A
-	if sheet == "Summary" {
-		labelCol = 1 // column B
-	}
-	colIdx := int(col[0] - 'A')
-	for _, r := range rows {
-		if len(r) > labelCol && r[labelCol] == label {
-			got := ""
-			if colIdx < len(r) {
-				got = r[colIdx]
-			}
-			if got != want {
-				t.Errorf("%s %q column %s = %q, want %q", sheet, label, col, got, want)
-			}
-			return
-		}
-	}
-	t.Errorf("%s has no row labelled %q", sheet, label)
-}
-
 // The baseline and fixed runs differ only where a switch applies. In the synthetic fixture the
 // Transfer is the one line a switch touches: fixed mode matches it with its prefix rule P-008, which
 // summarises nothing, while baseline mode falls to the Catch-all P-009 and routes it to Expenses > Amazon fees.
@@ -163,13 +135,7 @@ func TestRunModeIsRecorded(t *testing.T) {
 		t.Errorf("baseline run recorded switches %v, want none", rep.Switches)
 	}
 
-	fixed, err := ingest.Run(ctx, pool, ingest.Inputs{
-		PaymentsPath:   filepath.Join(fixtures, "synthetic_payments.csv"),
-		SettlementPath: filepath.Join(fixtures, "synthetic_settlement.txt"),
-	})
-	if err != nil {
-		t.Fatalf("ingest in fixed mode: %v", err)
-	}
+	fixed := ingestFixtures(t, pool)
 	fixedRep, err := recon.Build(ctx, pool, fixed.RunID)
 	if err != nil {
 		t.Fatalf("reconcile fixed run: %v", err)
@@ -191,8 +157,8 @@ func TestRunModeIsRecorded(t *testing.T) {
 			t.Fatalf("open workbook: %v", err)
 		}
 		defer f.Close()
-		checkSheetCell(t, f, "Summary", "Mode", "C", "baseline")
-		checkSheetCell(t, f, "Summary", "Interpretation switches", "C", "none")
+		checkValue(t, f, "Summary", "Mode", "C", "baseline")
+		checkValue(t, f, "Summary", "Interpretation switches", "C", "none")
 	})
 
 	if _, err := ingest.Run(ctx, pool, ingest.Inputs{

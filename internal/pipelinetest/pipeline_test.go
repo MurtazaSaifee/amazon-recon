@@ -15,7 +15,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/shopspring/decimal"
 	"github.com/xuri/excelize/v2"
 
 	"amazonrecon/internal/ingest"
@@ -268,35 +267,6 @@ func freshDatabase(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 	return pool
-}
-
-func ingestFixtures(t *testing.T, pool *pgxpool.Pool) ingest.Result {
-	t.Helper()
-	res, err := ingest.Run(context.Background(), pool, ingest.Inputs{
-		PaymentsPath:   filepath.Join(fixtures, "synthetic_payments.csv"),
-		SettlementPath: filepath.Join(fixtures, "synthetic_settlement.txt"),
-	})
-	if err != nil {
-		t.Fatalf("ingest: %v", err)
-	}
-	return res
-}
-
-func assertDec(t *testing.T, what string, got decimal.Decimal, want string) {
-	t.Helper()
-	w := decimal.RequireFromString(want)
-	if !got.Equal(w) {
-		t.Errorf("%s = %s, want %s", what, got.StringFixed(2), want)
-	}
-}
-
-func assertLine(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID int64, source string, lineNumber int, check func(store.Line)) {
-	t.Helper()
-	l, err := store.LoadLine(ctx, pool, runID, source, lineNumber)
-	if err != nil {
-		t.Fatalf("load %s line %d: %v", source, lineNumber, err)
-	}
-	check(l)
 }
 
 func assertPostedDate(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID int64, source string, lineNumber int, wantDate, wantBasis string) {
