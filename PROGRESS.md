@@ -2,6 +2,8 @@
 
 A running record of what I tried, what I ruled out, and how I isolated each variance.
 
+The log runs in date order: data exploration, design decisions, the Baseline (ticket 03), the reconciliation and investigation tickets, pass A, pass B, and the performance work. Where a later pass changed an earlier number, the earlier statement is marked as superseded rather than removed. The final counts and the Summary are under **Final results** at the end.
+
 ## 2026-10-28: Data exploration (before writing any code)
 
 ### The anchor number
@@ -14,7 +16,7 @@ A running record of what I tried, what I ruled out, and how I isolated each vari
 
 ### Normalisation the ingestion has to do (files are ingested as-is)
 - Payments CSV: UTF-8 BOM, 9 preamble lines before the header, and thousands separators in amounts (`"-133,756.51"`).
-- Payments dates are `GMT+9` and settlement dates are `UTC`. In payments, `date/time` is the *order* date, but `Transaction Release Date` converted to UTC equals the settlement's `posted-date-time` to the second. Example: order `200-0000000-0000001` has payments date/time 9 Jul, release date 17 Jul 4:26:32 pm GMT+9, and settlement posted-date-time 17.07.2026 07:26:32 UTC. So **`date` in `record_ref` must be the UTC posted date**.
+- Payments dates are `GMT+9` and settlement dates are `UTC`. In payments, `date/time` is the *order* date, but `Transaction Release Date` converted to UTC equals the settlement's `posted-date-time` to the second. Example: order `NNN-NNNNNNN-NNNNNNN` (redacted) has payments date/time 9 Jul, release date 17 Jul 4:26:32 pm GMT+9, and settlement posted-date-time 17.07.2026 07:26:32 UTC. So **`date` in `record_ref` must be the UTC posted date**.
 - Type and description values need upper-casing, with spaces turned into `_`, to match config keys. For example, `other-transaction` becomes `OTHER-TRANSACTION`, `Service fee` becomes `SERVICE_FEE`, and `FBA Inventory Reimbursement - Damaged:Warehouse` becomes `FBA_INVENTORY_REIMBURSEMENT_-_DAMAGED:WAREHOUSE`.
 - Payment column headers map to the config's `amount_field`. For example, `product sales` becomes `product_sales`, and `fulfilment by amazon fees` becomes `fba_fees`, which needs an alias.
 
@@ -23,7 +25,7 @@ A running record of what I tried, what I ruled out, and how I isolated each vari
 - A settlement row is one amount component (amount_type / amount_description).
 - I plan to aggregate each side by `record_ref` and then compare: the payments `total` against the sum of the settlement components.
 
-### Hypotheses about config defects (not yet verified, only from reading the configs)
+### Hypotheses about config defects (written before any run, from reading the configs)
 1. Payments `ORDER / low_value_goods` appears twice (→ `sales_shipping` **and** `sales_product_charges`). This would double-count.
 2. Payments `ORDER / sales_tax_collected` appears twice the same way. Settlement splits `Tax` (→ product charges) from `ShippingTax` (→ shipping), but payments has a single tax column. This may not be expressible in the config schema.
 3. Payments `ORDER / promotional_rebates` maps to `expenses_other`, while settlement `ORDER / Promotion / *` maps to `expenses_promotional_rebates`.
@@ -32,7 +34,15 @@ A running record of what I tried, what I ruled out, and how I isolated each vari
 6. Payments `REFUND / sales_tax_collected` has no summary field. Settlement `REFUND / ItemPrice / Tax` routes by sign to `total_refund_expense_or_sales_amt` or `refunded_expenses`.
 7. The payments catch-all row (`transaction_type` empty, `any`, `total` → `expenses_amazon_fees`) would absorb the Transfer row unless `TRANSFER / TO_ACCOUNT_ENDING` matches `To account ending with: NNN`. This may be a matching-logic question (prefix match) rather than a config defect.
 
-Each of these gets confirmed or ruled out against the actual Summary deltas once the pipeline runs.
+Each of these was confirmed or ruled out against the actual Summary deltas in pass A and pass B. The status of each, by hypothesis number:
+
+1. Confirmed in pass A (root cause A): P-005 and P-006 both route ORDER `low_value_goods`. P-005 was deleted.
+2. Confirmed in pass A (root cause B and the duplicate): P-071 and P-072 both route ORDER `sales_tax_collected`. P-072 was deleted. The tax split across four settlement components is a schema limitation, closed by the tax policy.
+3. Confirmed in pass A (F1): P-065 now routes promotional rebates to Promo rebates.
+4. Confirmed in pass A: S-095 (TaxDiscount) is now routed to Sales › Tax by the tax policy, not Sales › Shipping.
+5. Confirmed in pass A (F2): P-070 now routes gift wrap to Sales › Other, and no field is left unmapped.
+6. Confirmed in pass A: the refund tax on P-014 has no Summary field. It is closed by the refund-tax part of the tax policy.
+7. Confirmed in pass A: the Transfer falls to the Catch-all. It is closed by the switch `prefix_before_catch_all`, not by a config change.
 
 ### Facts checked while designing
 - With minimal normalisation, every in-scope payments line and settlement line matches at least one mapping rule. The one exception is the **Transfer** line (`TO_ACCOUNT_ENDING_WITH:_NNN`). No `TRANSFER` rule matches it exactly, so it falls through to the catch-all rule (empty `transaction_type`), which routes `total` to `expenses_amazon_fees`. Expected in the baseline: a −133,756.51 difference on Expenses › Amazon fees.
@@ -55,7 +65,7 @@ Other settled points:
 - **Step 5 method.** Pass A is driven by Variances (`recon explain --line …` plus variance views). Pass B checks the meaning of every rule that fires, which catches rules that are wrong on both sides in the same way. Objective defects are fixed. Accounting-policy calls go in a separate commented block of `MAPPING_FIXES.sql`.
 - **Robustness.** `ingest_runs` makes re-runs safe (a file's rows are replaced in one transaction). Malformed lines go to `ingest_errors`. A change log on the config tables records every config change.
 - **Data handling.** The input files carry buyer city, state and postcode alongside order IDs. The repo is public, so it contains no input data, full dump or generated reports. Those go with the submission email. Tests use small synthetic fixtures built to the same file shapes.
-- **AI.** There is no LLM in the money path. Claude Code is used for exploration and for adversarial checking of hypotheses. An optional `suggest` command comes only if time allows.
+- **AI.** There is no LLM in the money path. Claude Code is used for exploration and for adversarial checking of hypotheses. No `suggest` command was built, so the submission contains no LLM code.
 
 ## 2026-10-28: Ticket 01, tracer bullet (raw lines tie to the Settlement total)
 
@@ -102,7 +112,7 @@ Each source is grouped by record_ref over its in-scope mapped lines. The payment
 Checks:
 - An independent SQL query (sum of payments per record_ref against sum of Components per record_ref, outside the view) finds the same 13,289 records with both sides, and none of them differ.
 - The Transfer line is an Unreconciled payment, record_ref `|90000000001|2026-07-18`, -133,756.51.
-- Of the 26 Unreconciled payments, 25 are Order lines whose `total` is 0.00 and which have no Component. The Transfer is the only one with an amount. Amazon's Settlement report carries no Component for a zero amount, so these 25 fall out as Unreconciled payment under the definition. Left as it is: this is a classification question, not a config defect, and it is recorded here for the reviewer.
+- Of the 26 Unreconciled payments, 25 are Order lines whose `total` is 0.00 and which have no Component. The Transfer is the only one with an amount. Amazon's Settlement report carries no Component for a zero amount, so these 25 fall out as Unreconciled payment under the definition. *Correction, verified 2026-10-29: that is too broad. The file does carry zero-amount Components, but only beside non-zero Components of the same record. The accurate statement is that none of these 25 orders has any settlement row. See Final results.* Left as it is: this is a classification question, not a config defect, and it is recorded here for the reviewer.
 - Largest Reconciled-with-difference record_refs by absolute difference: none. No record_ref has a non-zero difference, so there is no top five to list.
 - Tie-out figures are unchanged from ticket 01: Components 212,118.95 (difference 0.00), Released excluding Transfer 212,118.95 (difference 0.00), Deferred memo 43,540.07 over 2,398 lines.
 
@@ -116,6 +126,7 @@ Gaps, not closed in this ticket:
 - The total difference is line-based, so the per-line differences do not add up to it wherever a routing gap exists.
 - Consolidated values are stored numbers, not formulas.
 - `WriteSource` deletes a report's rows across all runs, so only the latest run's lines are held. The run-level audit belongs to ticket 05.
+  - *Superseded on 2026-10-29: `WriteSource` was replaced by `WriteSources`, which deletes each report's old lines inside the ingest transaction. The run-level audit is in `ingest_runs` and `mapping_rule_history`.*
 
 ## 2026-10-28: Ticket 06, investigation tooling and before/after builds
 
@@ -129,7 +140,7 @@ Built:
 
 Real files, `make before` and `make after` (both from scratch on database `recon_t06`):
 - Both builds reconcile the same: Components 212,118.95 (difference 0.00), 13,289 reconciled record_refs, 26 unreconciled payments, Transfer -133,756.51.
-- The two builds are identical because no fix exists yet. The after build will differ once fixes are added.
+- The two builds are identical because no fix exists yet. The after build will differ once fixes are added. *Superseded by pass A, which made the after build differ.*
 
 `recon explain --line "Expenses/Amazon fees"` on the baseline (trimmed):
 
@@ -159,8 +170,10 @@ Decisions made in this ticket:
 
 Gaps, not closed in this ticket:
 - The switch registry is empty, so the `--baseline` and fixed runs cannot yet differ. A test with a registered switch would show that they do; for now the switch set is only checked as empty.
+  - *Superseded by pass A: the registry now holds `prefix_before_catch_all`, and the baseline and fixed builds differ on the real files.*
 - The Catch-all label is tested on the real files only. The synthetic fixtures never fire P-010 or any other Catch-all rule.
 - No mapping fixes exist yet, so the after build equals the before build.
+  - *Superseded by pass A: `MAPPING_FIXES.sql` now holds the fixes, and the after build differs from the before build.*
 
 ## 2026-10-28: Ticket 07, Step 5 pass A: the Variances on the Baseline (before any fix)
 
@@ -347,6 +360,8 @@ Settlements  S-022  REFUND / PROMOTION / SHIPPING           amount              
 
 The mapping history holds 16 changes after the seed: four objective changes (P-065 and P-070 UPDATE, P-072 and P-005 DELETE), three payments tax rules (P-071, P-006, P-014 UPDATE) and nine settlement tax rules (S-065, S-063, S-095, S-061, S-119, S-118, S-004, S-011, S-020 UPDATE). Each one is a row in `mapping_rule_history`.
 
+*Superseded in part by pass B: the Expenses › Amazon fees and Expenses › FBA fees values below (-132,593.41 and -0.41 on both sides) are replaced by the pass B values, which move the ORDER FBA fee (P1). Every other line stands.*
+
 The Summary sheet, every line, both columns (Variance is Payments minus Settlements):
 
 | Summary line | Payments | Settlements | Variance |
@@ -396,7 +411,7 @@ Counts per status (record_refs; Unmapped counts lines): Reconciled 13,289; Recon
 
 Notes on the after state:
 - Tier numbers moved. The prefix tier is 3, so the catch-all tiers are now 4 and 5. The baseline section above gives P-110 as tier 4, which was its number in the baseline run.
-- The Transfer's record_ref is now `TRANSFER|<its description>|90000000001|2026-07-18`, where the description carries the account's last digits. The Consolidated sheet shows the record_ref, so it shows those digits too. That is a presentation question for pass B, not a mapping one.
+- The Transfer's record_ref is now `TRANSFER|<its description>|90000000001|2026-07-18`, where the description carries the account's last digits. The Consolidated sheet shows the record_ref, so it shows those digits too. That is a presentation question, not a mapping one. It is still open after pass B (see the notes there and under Final results).
 
 Tax-shaped rules left unchanged for pass B (not part of the policy):
 - Fired, with no effect on any Summary line: P-004 (REFUND low_value_goods, no Summary field, in-scope sum 0.00). P-013 (REFUND marketplace_withheld_tax) and P-074 (ORDER marketplace_withheld_tax) route nothing, because the payments report has no column of that name, so their amount is always 0.
@@ -578,3 +593,69 @@ Ingesting the real files took about 360 s of wall-clock time (measured on a fres
 | `make after`, after the fix | 12.2 | 10.4 |
 
 After the fix the numbers do not move: every Summary variance is 0.00, Amazon fees are -35,790.24 and FBA fees are -96,803.58 on both sides, the Settlement tie and the payments unexplained difference are 0.00, and the counts are Reconciled 13,289, with difference 0, Unreconciled payment 26, Unreconciled settlement 0, Unmapped 0.
+
+## Final results
+
+The final build is the after build: `make after`, run 1, mode fixed, switch `prefix_before_catch_all`, config hash `05d22cbccce3`. The numbers are the pass B numbers, and the performance rerun reproduces them. The 26 unreconciled payments were checked with SQL on that run (`recon_perf3`, 2026-10-29).
+
+### The after Summary
+
+Variance is Payments minus Settlements. Every Variance is 0.00.
+
+| Summary line | Payments | Settlements | Variance |
+|---|---:|---:|---:|
+| Sales | 357,758.80 | 357,758.80 | 0.00 |
+| Sales › Product Charges | 335,336.96 | 335,336.96 | 0.00 |
+| Sales › Tax | 13,436.38 | 13,436.38 | 0.00 |
+| Sales › Shipping | 8,294.16 | 8,294.16 | 0.00 |
+| Sales › Amazon fees | 0.00 | 0.00 | 0.00 |
+| Sales › Inventory Reimbursements | 679.69 | 679.69 | 0.00 |
+| Sales › Cross-account Debt Adjustment | 0.00 | 0.00 | 0.00 |
+| Sales › Other | 11.61 | 11.61 | 0.00 |
+| Sales › FBA Fees | 0.00 | 0.00 | 0.00 |
+| Sales › Micro Deposit (Failed) | 0.00 | 0.00 | 0.00 |
+| Refunds | -1,772.50 | -1,772.50 | 0.00 |
+| Refunds › Refund expenses | 258.87 | 258.87 | 0.00 |
+| Refunds › Refunded sales | -2,031.37 | -2,031.37 | 0.00 |
+| Expenses | -143,867.35 | -143,867.35 | 0.00 |
+| Expenses › Promo rebates | -11,273.53 | -11,273.53 | 0.00 |
+| Expenses › FBA fees | -96,803.58 | -96,803.58 | 0.00 |
+| Expenses › Cost of Advertising | 0.00 | 0.00 | 0.00 |
+| Expenses › Shipping Charges | 0.00 | 0.00 | 0.00 |
+| Expenses › Amazon fees | -35,790.24 | -35,790.24 | 0.00 |
+| Expenses › Reversed Reimbursements | 0.00 | 0.00 | 0.00 |
+| Expenses › Cross-account Debt Adjustment | 0.00 | 0.00 | 0.00 |
+| Expenses › Other | 0.00 | 0.00 | 0.00 |
+| Expenses › Micro Deposit | 0.00 | 0.00 | 0.00 |
+| Paid To Amazon | 0.00 | 0.00 | 0.00 |
+| Summary fields with no Summary line | none | none | 0.00 |
+
+### Tie-outs
+
+- **Settlement.** The header total is 212,118.95. The in-scope components sum to 212,118.95 over 54,979 lines. Difference 0.00.
+- **Payments.** The Summary net is 212,118.95. The Transfer (-133,756.51, rule P-063) is the only in-scope amount outside the Summary, and it is shown as a routing gap on the Tie-out. The Released lines excluding the Transfer sum to 212,118.95 over 13,471 lines. Unexplained difference 0.00.
+- **Out of scope (memo).** Deferred lines: 43,540.07 over 2,398 lines. Payments lines for other settlements: 7,156.
+
+### Counts per status
+
+Counts are record_refs. Unmapped counts lines.
+
+| Status | Count |
+|---|---:|
+| Reconciled | 13,289 |
+| Reconciled with difference | 0 |
+| Unreconciled payment | 26 |
+| Unreconciled settlement | 0 |
+| Unmapped | 0 |
+
+### The 26 unreconciled payments
+
+- **The Transfer (1).** A bank payout of -133,756.51, not a sale. Its rule (P-063) has no Summary field, so it stays outside the Summary by design. The Tie-out shows it.
+- **Zero-value Order lines (25).** Each record is one payments line, and every amount column on it is 0.00. Its `total` is 0.00. The settlement report has no row for any of these orders, neither under the same `record_ref` nor under the same order ID (SQL: 0 rows). So there is nothing to pair these 25 with.
+- **What the zero-amount Components show.** The file has 47 in-scope Components with a zero amount, all of type ItemWithheldTax / LowValueGoodsTax-Shipping. Each one sits in a record that also has non-zero Components. Four Reconciled records with a zero payments total reconcile because their non-zero Components net to zero. The earlier statement in ticket 04, that Amazon writes no zero-amount Component, is therefore too broad, and it is corrected there.
+
+The SQL checks, all run on the after run: the Unreconciled payment records grouped by type and description, with every amount column of each line read from `raw_payload`. Settlement rows for the same order, by `record_ref` and by `txn_ref`. Zero-amount in-scope Components and the status of their `record_ref`.
+
+### Open items
+
+- The Transfer's `record_ref` in the Consolidated Data sheet carries the account's last three digits. The reviewer has not decided whether to mask it. It must be decided before the workbook goes with the submission email.
