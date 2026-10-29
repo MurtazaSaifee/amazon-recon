@@ -181,6 +181,8 @@ Run them with `make test`, or `RECON_DATABASE_URL=… go test ./...`.
 
 The two reports, the two mapping configs, the generated workbooks and the PostgreSQL dump contain seller data (buyer locations, order IDs, product details). The repository is public, so they go with the submission email instead. `.gitignore` excludes them.
 
+Identifiers from the real files are redacted in this repository's history: the settlement ID appears as 90000000001 and the bank account's last digits as 999. The workbooks and dump sent with the email carry the real values.
+
 ## How it was built
 
 A written design, then a sequence of small tickets, each implemented test-first by AI coding agents working in separate git worktrees. An orchestrating reviewer coordinated the work. The changes were reviewed on two axes: whether they follow the repository's standards, and whether they do what their ticket asked. Every reported number was checked with SQL against the source rows, and no LLM is in the money path.
