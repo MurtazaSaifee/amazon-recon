@@ -1,8 +1,18 @@
 # Amazon Payments vs Settlement reconciliation
 
+[![CI](https://github.com/MurtazaSaifee/amazon-recon/actions/workflows/ci.yml/badge.svg)](https://github.com/MurtazaSaifee/amazon-recon/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Reads an Amazon Payments report and a Settlement report, matches every line to a config-driven rule, routes its amounts to Summary fields, and reconciles the two by `record_ref`. The result is an Excel workbook whose Summary balances to the Settlement total and in which every number traces to a source line.
 
 No LLM is in the money path. All money is `NUMERIC(14,2)` in PostgreSQL and `shopspring/decimal` in Go.
+
+## Engineering highlights
+
+- **Exact decimal accounting & full provenance:** Every monetary amount uses PostgreSQL `NUMERIC(14,2)` and `shopspring/decimal` (zero floating-point arithmetic), while `source_rows` and `summary_contributions` preserve source file, line number, raw JSONB cells, and matched rule IDs for every Summary figure.
+- **Guarded, auditable rule fixes:** `MAPPING_FIXES.sql` runs in a single transaction via `apply-fixes` with optimistic `WHERE` guards on expected prior values, and database triggers record every change in `mapping_rule_history`.
+- **Self-verifying pipeline & safe re-runs:** Batched `COPY` ingestion (5,000 rows/batch + post-load `ANALYZE`) cross-checks running totals against SQL recomputation, rejects stale configs and malformed in-scope lines before replacing prior complete runs, and guards `migrate --reset` by database name (`recon*`) and explicit `RECON_DATABASE_URL`.
+- **Before/after reproducibility & root-cause CLI:** One binary produces both the baseline (`--baseline`) and fixed workbooks via versioned interpretation switches, while `recon explain --line` traces any Summary variance to exact rules and `record_ref`s.
 
 ## What I found (step 5)
 

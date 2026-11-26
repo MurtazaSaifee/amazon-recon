@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: Vet and test (Go + PostgreSQL 17)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: recon
+          POSTGRES_PASSWORD: recon
+          POSTGRES_DB: recon
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U recon -d recon"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      RECON_DATABASE_URL: postgres://recon:recon@localhost:5432/recon?sslmode=disable
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Run unit and pipeline tests
+        run: go test ./...
